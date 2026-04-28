@@ -1,4 +1,4 @@
-import { findAttackButton } from './selectors.js';
+import { findAttackButton, isAttackPage } from './selectors.js';
 import { showBanner, removeBanner } from './banner.js';
 import { getBlockReason } from '../state/store.js';
 
@@ -9,9 +9,14 @@ let clickGuardInstalled = false;
  * Block the attack button: disable it, mark it, show tooltip and banner.
  */
 export function blockButton() {
+  if (!isAttackPage()) {
+    removeBanner();
+    return;
+  }
+
   const btn = findAttackButton();
   if (!btn) {
-    console.warn('No attack button found');
+    console.debug('[UCM] Attack page detected, but no attack button found yet.');
     return;
   }
 
@@ -38,6 +43,12 @@ export function blockButton() {
  * Unblock the attack button: re-enable it, remove markers and banner.
  */
 export function unblockButton() {
+  if (!isAttackPage()) {
+    blockedButtonRef = null;
+    removeBanner();
+    return;
+  }
+
   const btn = getBlockedButton() || findAttackButton();
   if (!btn) return;
 
@@ -70,6 +81,16 @@ export function getBlockedButton() {
  * Called by MutationObserver after DOM changes.
  */
 export function reapplyIfNeeded(shouldBlock) {
+  if (!isAttackPage()) {
+    const btn = getBlockedButton();
+    if (btn) {
+      unblockButton();
+    } else {
+      removeBanner();
+    }
+    return;
+  }
+
   if (shouldBlock) {
     blockButton();
   } else {
@@ -86,6 +107,7 @@ export function installAttackClickGuard(isBlockedFn) {
   clickGuardInstalled = true;
 
   document.addEventListener('click', (event) => {
+    if (!isAttackPage()) return;
     if (!isBlockedFn()) return;
 
     const button = event.target instanceof Element
@@ -102,6 +124,7 @@ export function installAttackClickGuard(isBlockedFn) {
   }, true);
 
   document.addEventListener('submit', (event) => {
+    if (!isAttackPage()) return;
     if (!isBlockedFn()) return;
 
     const form = event.target instanceof HTMLFormElement ? event.target : null;
