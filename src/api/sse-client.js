@@ -1,5 +1,7 @@
 import { CONFIG } from '../config.js';
 import { state } from '../state/store.js';
+import { logDiagnostic, setSseStatus } from '../lib/diagnostics.js';
+import { getStreamingUserscriptRequest } from '../lib/transport.js';
 
 /**
  * SSE client implemented on top of GM_xmlhttpRequest.
@@ -31,21 +33,16 @@ let disposed = false;
 let onEventCallback = null;
 let lastEventId = 0;
 
-function getUserscriptRequest() {
-  if (typeof GM_xmlhttpRequest === 'function') {
-    return GM_xmlhttpRequest;
-  }
-  if (typeof GM !== 'undefined' && typeof GM.xmlHttpRequest === 'function') {
-    return GM.xmlHttpRequest.bind(GM);
-  }
-  return null;
-}
-
 function scheduleReconnect() {
   if (disposed) return;
   const base = Math.min(1000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
   const jitter = Math.floor(Math.random() * 500);
   reconnectAttempts += 1;
+  setSseStatus('reconnecting', {
+    reconnectAttempts,
+    delayMs: base + jitter,
+    lastEventId,
+  });
   setTimeout(() => {
     if (!disposed) openStream();
   }, base + jitter);
@@ -82,15 +79,24 @@ function dispatchBlock(block) {
       lastEventId = parsedId;
     }
     onEventCallback(eventType, parsed, parsedId);
+    logDiagnostic('ok', 'sse', `event ${eventType}`, {
+      eventId: parsedId,
+      lastEventId,
+    });
   } catch (err) {
-    console.warn('[UCM] Failed to parse SSE event:', err);
+    logDiagnostic('warn', 'sse', 'failed to parse SSE event', {
+      message: err?.message || 'unknown error',
+    });
   }
 }
 
 function openStream() {
-  const gmRequest = getUserscriptRequest();
+  const gmRequest = getStreamingUserscriptRequest();
   if (!gmRequest) {
-    console.error('[UCM] GM_xmlhttpRequest unavailable; cannot open SSE stream.');
+    setSseStatus('error', {
+      message: 'Streaming userscript transport unavailable. TornPDA may not expose GM_xmlhttpRequest for SSE.',
+      hasPdaHttpGet: typeof PDA_httpGet === 'function',
+    });
     return;
   }
 
@@ -103,7 +109,7 @@ function openStream() {
     if (announcedOpen) return;
     announcedOpen = true;
     reconnectAttempts = 0;
-    console.log('[UCM] SSE connected');
+    setSseStatus('connected', { lastEventId });
   };
 
   const ingest = (response) => {
@@ -140,17 +146,17 @@ function openStream() {
     onload: (response) => {
       ingest(response);
       if (disposed) return;
-      console.warn('[UCM] SSE stream ended, reconnecting...');
+      logDiagnostic('warn', 'sse', 'SSE stream ended', { lastEventId });
       scheduleReconnect();
     },
     onerror: () => {
       if (disposed) return;
-      console.warn('[UCM] SSE connection error, reconnecting...');
+      logDiagnostic('warn', 'sse', 'SSE connection error', { lastEventId });
       scheduleReconnect();
     },
     ontimeout: () => {
       if (disposed) return;
-      console.warn('[UCM] SSE timed out, reconnecting...');
+      logDiagnostic('warn', 'sse', 'SSE timed out', { lastEventId });
       scheduleReconnect();
     },
   });
@@ -164,6 +170,7 @@ export function connectSSE(onEvent) {
   onEventCallback = onEvent;
   disposed = false;
   reconnectAttempts = 0;
+  setSseStatus('connecting', { lastEventId });
 
   if (currentRequest && typeof currentRequest.abort === 'function') {
     try { currentRequest.abort(); } catch { /* ignore */ }
@@ -176,6 +183,7 @@ export function connectSSE(onEvent) {
 export function disconnectSSE() {
   disposed = true;
   reconnectAttempts = 0;
+  setSseStatus('disconnected', { lastEventId });
   if (currentRequest && typeof currentRequest.abort === 'function') {
     try { currentRequest.abort(); } catch { /* ignore */ }
   }

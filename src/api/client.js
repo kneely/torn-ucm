@@ -1,6 +1,8 @@
 import { CONFIG } from '../config.js';
 import { state } from '../state/store.js';
 import { storageRemove, storageSet } from '../lib/storage.js';
+import { logDiagnostic } from '../lib/diagnostics.js';
+import { getTransportCapabilities, httpRequest } from '../lib/transport.js';
 
 const REFRESH_SESSION_PATH = '/auth/refresh-session';
 let refreshSessionPromise = null;
@@ -32,22 +34,7 @@ function parseBody(contentType, text) {
   }
 }
 
-async function parseFetchResponse(resp) {
-  const contentType = resp.headers.get('content-type') || '';
-
-  if (resp.status === 204) {
-    return null;
-  }
-
-  try {
-    const text = await resp.text();
-    return parseBody(contentType, text);
-  } catch {
-    return null;
-  }
-}
-
-function parseGmResponse(response) {
+function parseTransportResponse(response) {
   const contentTypeMatch = response.responseHeaders?.match(/^content-type:\s*([^\r\n]+)/im);
   const contentType = contentTypeMatch?.[1] || '';
 
@@ -58,51 +45,25 @@ function parseGmResponse(response) {
   return parseBody(contentType, response.responseText || '');
 }
 
-function getUserscriptRequest() {
-  if (typeof GM_xmlhttpRequest === 'function') {
-    return GM_xmlhttpRequest;
+function appendQueryToken(url) {
+  if (!state.sessionToken) return url;
+  try {
+    const nextUrl = new URL(url);
+    if (!nextUrl.searchParams.has('token')) {
+      nextUrl.searchParams.set('token', state.sessionToken);
+    }
+    return nextUrl.toString();
+  } catch {
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}token=${encodeURIComponent(state.sessionToken)}`;
   }
-
-  if (typeof GM !== 'undefined' && typeof GM.xmlHttpRequest === 'function') {
-    return GM.xmlHttpRequest.bind(GM);
-  }
-
-  return null;
-}
-
-function requestViaUserscript(method, url, opts) {
-  const gmRequest = getUserscriptRequest();
-  if (!gmRequest) return null;
-
-  return new Promise((resolve, reject) => {
-    gmRequest({
-      method,
-      url,
-      headers: opts.headers,
-      data: opts.body,
-      responseType: 'text',
-      onload: (response) => {
-        resolve({
-          ok: response.status >= 200 && response.status < 300,
-          status: response.status,
-          data: parseGmResponse(response),
-        });
-      },
-      onerror: () => {
-        reject(new Error('Userscript network request failed.'));
-      },
-      ontimeout: () => {
-        reject(new Error('Userscript network request timed out.'));
-      },
-    });
-  });
 }
 
 /**
  * Make an authenticated request to the UCM backend.
  */
 async function requestOnce(method, path, body = null) {
-  const url = `${CONFIG.BACKEND_URL}${path}`;
+  let url = `${CONFIG.BACKEND_URL}${path}`;
   const isOnboardRequest = path === '/auth/onboard-member';
   const opts = {
     method,
@@ -115,80 +76,56 @@ async function requestOnce(method, path, body = null) {
     opts.headers.Authorization = `Bearer ${state.sessionToken}`;
   }
 
+  const capabilities = getTransportCapabilities(method);
+  let usesQueryToken = false;
+  if (method === 'GET' && state.sessionToken && capabilities.hasPdaTransport) {
+    url = appendQueryToken(url);
+    usesQueryToken = true;
+  }
+
   if (body) {
     opts.body = JSON.stringify(body);
   }
 
   if (isOnboardRequest) {
-    console.log('[UCM][api] onboarding request start', {
+    logDiagnostic('info', 'onboarding', 'onboarding request start', {
       method,
       url,
-      hasUserscriptRequest: Boolean(getUserscriptRequest()),
+      ...capabilities,
+      usesQueryToken,
       timezone: body?.timezone,
       scriptVersion: body?.scriptVersion,
       apiKeyLength: body?.apiKey?.length || 0,
     });
   }
 
+  let response;
   try {
-    const gmResponse = await requestViaUserscript(method, url, opts);
-    if (gmResponse) {
-      if (isOnboardRequest) {
-        console.log('[UCM][api] onboarding userscript request completed', {
-          status: gmResponse.status,
-          ok: gmResponse.ok,
-          hasSessionToken: Boolean(gmResponse.data?.sessionToken),
-        });
-      }
-
-      if (!gmResponse.ok) {
-        const message = gmResponse.data?.error || gmResponse.data?.message || `Request failed: ${gmResponse.status}`;
-        throw new ApiError(message, gmResponse.status, gmResponse.data);
-      }
-
-      return gmResponse.data;
-    }
+    response = await httpRequest(method, url, opts);
   } catch (err) {
     if (isOnboardRequest) {
-      console.error('[UCM][api] onboarding userscript request failed', {
+      logDiagnostic('error', 'onboarding', 'onboarding request failed', {
         message: err?.message || 'unknown error',
       });
     }
 
-    if (err instanceof ApiError) {
-      throw err;
-    }
-
-    if (getUserscriptRequest()) {
-      throw new Error(err?.message || 'Userscript network request failed.');
-    }
-  }
-
-  let resp;
-  try {
-    resp = await fetch(url, opts);
-  } catch (err) {
-    if (isOnboardRequest) {
-      console.error('[UCM][api] onboarding fetch request failed', {
-        message: err?.message || 'unknown error',
-      });
-    }
     throw new Error(`Network request failed: ${err?.message || 'unknown error'}`);
   }
 
-  const data = await parseFetchResponse(resp);
+  const data = parseTransportResponse(response);
 
   if (isOnboardRequest) {
-    console.log('[UCM][api] onboarding fetch request completed', {
-      status: resp.status,
-      ok: resp.ok,
+    logDiagnostic(response.ok ? 'ok' : 'warn', 'onboarding', 'onboarding request completed', {
+      status: response.status,
+      ok: response.ok,
+      transport: response.transport,
       hasSessionToken: Boolean(data?.sessionToken),
     });
   }
 
-  if (!resp.ok) {
-    const message = data?.error || data?.message || `Request failed: ${resp.status}`;
-    throw new ApiError(message, resp.status, data);
+  if (!response.ok) {
+    const message = data?.error || data?.message || `Request failed: ${response.status}`;
+    throw new ApiError(message, response.status, data);
   }
 
   return data;
@@ -233,7 +170,7 @@ async function refreshSession() {
       }
 
       persistSession(data);
-      console.log('[UCM][api] session refreshed', {
+      logDiagnostic('ok', 'api', 'session refreshed', {
         memberId: state.memberId || null,
         factionId: state.factionId || null,
         permissionCount: state.permissions.length,
@@ -258,6 +195,7 @@ async function request(method, path, body = null, hasRetried = false) {
     return await requestOnce(method, path, body);
   } catch (error) {
     if (!hasRetried && error?.status === 401 && canRefreshSession(path)) {
+      logDiagnostic('warn', 'api', 'request unauthorized; refreshing session', { path });
       await refreshSession();
       return request(method, path, body, true);
     }

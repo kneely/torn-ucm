@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn UCM - Ultimate Chain Manager
 // @namespace    https://github.com/kneely/torn-ucm-userscript
-// @version      2.0.0
+// @version      0.0.1
 // @description  Faction chain coordination for Torn - real-time commands, attack blocking, and presence tracking
 // @author       kneely
 // @match        https://www.torn.com/*
@@ -133,6 +133,279 @@
 		return "Blocked by Ultimate Chain Manager";
 	}
 	//#endregion
+	//#region src/lib/diagnostics.js
+	var MAX_ENTRIES = 150;
+	var SENSITIVE_QUERY_KEYS = new Set([
+		"apiKey",
+		"apikey",
+		"key",
+		"token",
+		"sessionToken",
+		"access_token"
+	]);
+	var entries = [];
+	var listeners = /* @__PURE__ */ new Set();
+	var lastTransport = "unknown";
+	var sseStatus = "idle";
+	function getConsoleMethod(level) {
+		if (level === "error") return "error";
+		if (level === "warn") return "warn";
+		return "log";
+	}
+	function notify() {
+		for (const listener of listeners) try {
+			listener(entries);
+		} catch {}
+	}
+	function safeString(value) {
+		if (value == null) return "";
+		if (typeof value === "string") return value;
+		try {
+			return JSON.stringify(value);
+		} catch {
+			return String(value);
+		}
+	}
+	function redactUrl(value) {
+		if (!value) return "";
+		try {
+			const url = new URL(String(value), window.location.href);
+			for (const key of Array.from(url.searchParams.keys())) if (SENSITIVE_QUERY_KEYS.has(key) || /token|key|secret/i.test(key)) url.searchParams.set(key, "***");
+			const query = url.searchParams.toString();
+			return `${url.host}${url.pathname}${query ? `?${query}` : ""}`;
+		} catch {
+			return String(value).replace(/([?&][^=]*(?:token|key|secret)[^=]*=)[^&\s]+/gi, "$1***");
+		}
+	}
+	function redactDetails(details = {}) {
+		const redacted = {};
+		for (const [key, value] of Object.entries(details || {})) if (/^(apiKey|apikey|key|token|sessionToken|secret|authorization)$/i.test(key)) redacted[key] = value ? "***" : value;
+		else if (/url/i.test(key)) redacted[key] = redactUrl(value);
+		else redacted[key] = value;
+		return redacted;
+	}
+	function logDiagnostic(level, area, message, details = void 0) {
+		const normalizedLevel = [
+			"ok",
+			"info",
+			"warn",
+			"error"
+		].includes(level) ? level : "info";
+		const entry = {
+			id: Date.now() + Math.random(),
+			ts: (/* @__PURE__ */ new Date()).toISOString(),
+			level: normalizedLevel,
+			area: area || "app",
+			message: message || "",
+			details: details === void 0 ? void 0 : redactDetails(details)
+		};
+		entries.push(entry);
+		if (entries.length > MAX_ENTRIES) entries.shift();
+		const consoleMethod = getConsoleMethod(normalizedLevel);
+		const prefix = `[UCM][${entry.area}] ${entry.message}`;
+		if (entry.details !== void 0) console[consoleMethod](prefix, entry.details);
+		else console[consoleMethod](prefix);
+		notify();
+		return entry;
+	}
+	function setLastTransport(transport) {
+		lastTransport = transport || "unknown";
+	}
+	function setSseStatus(status, details = void 0) {
+		sseStatus = status || "unknown";
+		logDiagnostic(status === "error" ? "error" : "info", "sse", `SSE ${sseStatus}`, details);
+	}
+	function getDiagnosticsEntries() {
+		return [...entries];
+	}
+	function clearDiagnostics() {
+		entries.length = 0;
+		notify();
+	}
+	function getPlatformInfo() {
+		const hasPdaGet = typeof PDA_httpGet === "function";
+		const hasPdaPost = typeof PDA_httpPost === "function";
+		const hasGmXmlHttpRequest = typeof GM_xmlhttpRequest === "function";
+		const hasGmNamespaceRequest = typeof GM !== "undefined" && typeof GM.xmlHttpRequest === "function";
+		const scriptVersion = typeof GM_info !== "undefined" && GM_info?.script?.version || "unknown";
+		return {
+			platform: hasPdaGet || hasPdaPost ? "TornPDA" : "Userscript manager",
+			backendUrl: CONFIG.BACKEND_URL,
+			scriptVersion,
+			href: typeof window !== "undefined" ? window.location.href : "",
+			readyState: typeof document !== "undefined" ? document.readyState : "",
+			isTopWindow: typeof window !== "undefined" ? window.top === window.self : true,
+			hasPdaGet,
+			hasPdaPost,
+			hasGmXmlHttpRequest,
+			hasGmNamespaceRequest,
+			hasFetch: typeof fetch === "function",
+			lastTransport,
+			sseStatus,
+			hasSessionToken: Boolean(state.sessionToken),
+			sessionTokenLength: state.sessionToken?.length || 0,
+			memberId: state.memberId || null,
+			factionId: state.factionId || null,
+			permissionCount: Array.isArray(state.permissions) ? state.permissions.length : 0,
+			currentChainId: state.currentChainId || null,
+			commandMode: state.commandMode || null
+		};
+	}
+	function serializeDiagnostics() {
+		const platform = getPlatformInfo();
+		const lines = [
+			"UCM diagnostics",
+			`Generated: ${(/* @__PURE__ */ new Date()).toISOString()}`,
+			`Platform: ${platform.platform}`,
+			`Backend: ${redactUrl(platform.backendUrl)}`,
+			`Script version: ${platform.scriptVersion}`,
+			`Transport: ${platform.lastTransport}`,
+			`SSE: ${platform.sseStatus}`,
+			`Session: ${platform.hasSessionToken ? `present (${platform.sessionTokenLength})` : "missing"}`,
+			`Member: ${platform.memberId || "-"}`,
+			`Faction: ${platform.factionId || "-"}`,
+			"",
+			"Recent entries:"
+		];
+		for (const entry of entries) {
+			const details = entry.details === void 0 ? "" : ` ${safeString(entry.details)}`;
+			lines.push(`${entry.ts} ${entry.level.toUpperCase()} [${entry.area}] ${entry.message}${details}`);
+		}
+		return lines.join("\n");
+	}
+	if (typeof window !== "undefined") window.__UCM_DIAGNOSTICS__ = {
+		clear: clearDiagnostics,
+		entries: getDiagnosticsEntries,
+		info: getPlatformInfo,
+		text: serializeDiagnostics
+	};
+	//#endregion
+	//#region src/lib/transport.js
+	function getGmRequest() {
+		if (typeof GM_xmlhttpRequest === "function") return GM_xmlhttpRequest;
+		if (typeof GM !== "undefined" && typeof GM.xmlHttpRequest === "function") return GM.xmlHttpRequest.bind(GM);
+		return null;
+	}
+	function getPdaTransport(method) {
+		const normalized = String(method || "GET").toUpperCase();
+		if (normalized === "GET" && typeof PDA_httpGet === "function") return PDA_httpGet;
+		if (normalized === "POST" && typeof PDA_httpPost === "function") return PDA_httpPost;
+		return null;
+	}
+	function responseTextFrom(value) {
+		if (typeof value?.responseText === "string") return value.responseText;
+		if (typeof value?.body === "string") return value.body;
+		if (typeof value?.data === "string") return value.data;
+		if (typeof value === "string") return value;
+		return "";
+	}
+	function responseHeadersFrom(value) {
+		if (typeof value?.responseHeaders === "string") return value.responseHeaders;
+		if (typeof value?.headers === "string") return value.headers;
+		if (value?.headers && typeof value.headers.forEach === "function") {
+			const rows = [];
+			value.headers.forEach((headerValue, headerName) => {
+				rows.push(`${headerName}: ${headerValue}`);
+			});
+			return rows.join("\r\n");
+		}
+		return "";
+	}
+	function normalizeResponse(response, transport) {
+		const status = Number(response?.status || 0);
+		return {
+			ok: status >= 200 && status < 300,
+			status,
+			responseText: responseTextFrom(response),
+			responseHeaders: responseHeadersFrom(response),
+			transport
+		};
+	}
+	function requestViaPda(method, url, opts) {
+		const pdaTransport = getPdaTransport(method);
+		if (!pdaTransport) return null;
+		if (String(method || "GET").toUpperCase() === "GET") return pdaTransport(url).then((response) => normalizeResponse(response, "pda"));
+		return pdaTransport(url, opts.headers || {}, opts.body || "").then((response) => normalizeResponse(response, "pda"));
+	}
+	function requestViaGm(method, url, opts) {
+		const gmRequest = getGmRequest();
+		if (!gmRequest) return null;
+		return new Promise((resolve, reject) => {
+			gmRequest({
+				method,
+				url,
+				headers: opts.headers,
+				data: opts.body,
+				responseType: "text",
+				onload: (response) => {
+					resolve(normalizeResponse(response, "gm"));
+				},
+				onerror: () => {
+					reject(/* @__PURE__ */ new Error("Userscript network request failed."));
+				},
+				ontimeout: () => {
+					reject(/* @__PURE__ */ new Error("Userscript network request timed out."));
+				}
+			});
+		});
+	}
+	async function requestViaFetch(method, url, opts) {
+		const response = await fetch(url, opts);
+		const responseText = response.status === 204 ? "" : await response.text();
+		return normalizeResponse({
+			status: response.status,
+			responseText,
+			headers: response.headers
+		}, "fetch");
+	}
+	function getTransportCapabilities(method = "GET") {
+		return {
+			hasPdaTransport: Boolean(getPdaTransport(method)),
+			hasGmTransport: Boolean(getGmRequest()),
+			hasFetch: typeof fetch === "function"
+		};
+	}
+	async function httpRequest(method, url, opts = {}) {
+		const normalizedMethod = String(method || "GET").toUpperCase();
+		const started = performance.now();
+		const redactedUrl = redactUrl(url);
+		const attempts = [];
+		logDiagnostic("info", "api", `${normalizedMethod} ${redactedUrl} start`, {
+			hasPdaTransport: Boolean(getPdaTransport(normalizedMethod)),
+			hasGmTransport: Boolean(getGmRequest()),
+			hasFetch: typeof fetch === "function"
+		});
+		const runAttempt = async (name, requestFn) => {
+			attempts.push(name);
+			try {
+				const response = await requestFn();
+				setLastTransport(response.transport);
+				const ms = Math.round(performance.now() - started);
+				logDiagnostic(response.ok ? "ok" : "warn", "api", `${normalizedMethod} ${redactedUrl} -> ${response.status || "ERR"}`, {
+					transport: response.transport,
+					ms
+				});
+				return response;
+			} catch (error) {
+				const ms = Math.round(performance.now() - started);
+				logDiagnostic("warn", "api", `${normalizedMethod} ${redactedUrl} ${name} failed`, {
+					transport: name,
+					ms,
+					message: error?.message || "unknown error"
+				});
+				throw error;
+			}
+		};
+		if (getPdaTransport(normalizedMethod)) return runAttempt("pda", () => requestViaPda(normalizedMethod, url, opts));
+		if (getGmRequest()) return runAttempt("gm", () => requestViaGm(normalizedMethod, url, opts));
+		if (typeof fetch === "function") return runAttempt("fetch", () => requestViaFetch(normalizedMethod, url, opts));
+		logDiagnostic("error", "api", `${normalizedMethod} ${redactedUrl} no transport available`, { attempts });
+		throw new Error("No compatible network transport is available.");
+	}
+	function getStreamingUserscriptRequest() {
+		return getGmRequest();
+	}
+	//#endregion
 	//#region src/api/client.js
 	var REFRESH_SESSION_PATH = "/auth/refresh-session";
 	var refreshSessionPromise = null;
@@ -157,101 +430,63 @@
 			return { error: text };
 		}
 	}
-	async function parseFetchResponse(resp) {
-		const contentType = resp.headers.get("content-type") || "";
-		if (resp.status === 204) return null;
-		try {
-			return parseBody(contentType, await resp.text());
-		} catch {
-			return null;
-		}
-	}
-	function parseGmResponse(response) {
+	function parseTransportResponse(response) {
 		const contentType = (response.responseHeaders?.match(/^content-type:\s*([^\r\n]+)/im))?.[1] || "";
 		if (response.status === 204) return null;
 		return parseBody(contentType, response.responseText || "");
 	}
-	function getUserscriptRequest$1() {
-		if (typeof GM_xmlhttpRequest === "function") return GM_xmlhttpRequest;
-		if (typeof GM !== "undefined" && typeof GM.xmlHttpRequest === "function") return GM.xmlHttpRequest.bind(GM);
-		return null;
-	}
-	function requestViaUserscript(method, url, opts) {
-		const gmRequest = getUserscriptRequest$1();
-		if (!gmRequest) return null;
-		return new Promise((resolve, reject) => {
-			gmRequest({
-				method,
-				url,
-				headers: opts.headers,
-				data: opts.body,
-				responseType: "text",
-				onload: (response) => {
-					resolve({
-						ok: response.status >= 200 && response.status < 300,
-						status: response.status,
-						data: parseGmResponse(response)
-					});
-				},
-				onerror: () => {
-					reject(/* @__PURE__ */ new Error("Userscript network request failed."));
-				},
-				ontimeout: () => {
-					reject(/* @__PURE__ */ new Error("Userscript network request timed out."));
-				}
-			});
-		});
+	function appendQueryToken(url) {
+		if (!state.sessionToken) return url;
+		try {
+			const nextUrl = new URL(url);
+			if (!nextUrl.searchParams.has("token")) nextUrl.searchParams.set("token", state.sessionToken);
+			return nextUrl.toString();
+		} catch {
+			return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(state.sessionToken)}`;
+		}
 	}
 	/**
 	* Make an authenticated request to the UCM backend.
 	*/
 	async function requestOnce(method, path, body = null) {
-		const url = `${CONFIG.BACKEND_URL}${path}`;
+		let url = `${CONFIG.BACKEND_URL}${path}`;
 		const isOnboardRequest = path === "/auth/onboard-member";
 		const opts = {
 			method,
 			headers: { "Content-Type": "application/json" }
 		};
 		if (state.sessionToken) opts.headers.Authorization = `Bearer ${state.sessionToken}`;
+		const capabilities = getTransportCapabilities(method);
+		let usesQueryToken = false;
+		if (method === "GET" && state.sessionToken && capabilities.hasPdaTransport) {
+			url = appendQueryToken(url);
+			usesQueryToken = true;
+		}
 		if (body) opts.body = JSON.stringify(body);
-		if (isOnboardRequest) console.log("[UCM][api] onboarding request start", {
+		if (isOnboardRequest) logDiagnostic("info", "onboarding", "onboarding request start", {
 			method,
 			url,
-			hasUserscriptRequest: Boolean(getUserscriptRequest$1()),
+			...capabilities,
+			usesQueryToken,
 			timezone: body?.timezone,
 			scriptVersion: body?.scriptVersion,
 			apiKeyLength: body?.apiKey?.length || 0
 		});
+		let response;
 		try {
-			const gmResponse = await requestViaUserscript(method, url, opts);
-			if (gmResponse) {
-				if (isOnboardRequest) console.log("[UCM][api] onboarding userscript request completed", {
-					status: gmResponse.status,
-					ok: gmResponse.ok,
-					hasSessionToken: Boolean(gmResponse.data?.sessionToken)
-				});
-				if (!gmResponse.ok) throw new ApiError(gmResponse.data?.error || gmResponse.data?.message || `Request failed: ${gmResponse.status}`, gmResponse.status, gmResponse.data);
-				return gmResponse.data;
-			}
+			response = await httpRequest(method, url, opts);
 		} catch (err) {
-			if (isOnboardRequest) console.error("[UCM][api] onboarding userscript request failed", { message: err?.message || "unknown error" });
-			if (err instanceof ApiError) throw err;
-			if (getUserscriptRequest$1()) throw new Error(err?.message || "Userscript network request failed.");
-		}
-		let resp;
-		try {
-			resp = await fetch(url, opts);
-		} catch (err) {
-			if (isOnboardRequest) console.error("[UCM][api] onboarding fetch request failed", { message: err?.message || "unknown error" });
+			if (isOnboardRequest) logDiagnostic("error", "onboarding", "onboarding request failed", { message: err?.message || "unknown error" });
 			throw new Error(`Network request failed: ${err?.message || "unknown error"}`);
 		}
-		const data = await parseFetchResponse(resp);
-		if (isOnboardRequest) console.log("[UCM][api] onboarding fetch request completed", {
-			status: resp.status,
-			ok: resp.ok,
+		const data = parseTransportResponse(response);
+		if (isOnboardRequest) logDiagnostic(response.ok ? "ok" : "warn", "onboarding", "onboarding request completed", {
+			status: response.status,
+			ok: response.ok,
+			transport: response.transport,
 			hasSessionToken: Boolean(data?.sessionToken)
 		});
-		if (!resp.ok) throw new ApiError(data?.error || data?.message || `Request failed: ${resp.status}`, resp.status, data);
+		if (!response.ok) throw new ApiError(data?.error || data?.message || `Request failed: ${response.status}`, response.status, data);
 		return data;
 	}
 	function persistSession$1(data) {
@@ -282,7 +517,7 @@
 			const data = await requestOnce("POST", REFRESH_SESSION_PATH);
 			if (!data?.sessionToken) throw new Error("Session refresh failed: missing session token.");
 			persistSession$1(data);
-			console.log("[UCM][api] session refreshed", {
+			logDiagnostic("ok", "api", "session refreshed", {
 				memberId: state.memberId || null,
 				factionId: state.factionId || null,
 				permissionCount: state.permissions.length
@@ -301,6 +536,7 @@
 			return await requestOnce(method, path, body);
 		} catch (error) {
 			if (!hasRetried && error?.status === 401 && canRefreshSession(path)) {
+				logDiagnostic("warn", "api", "request unauthorized; refreshing session", { path });
 				await refreshSession();
 				return request(method, path, body, true);
 			}
@@ -396,9 +632,7 @@
 		}
 	}
 	function logOnboarding(message, details = void 0, level = "log") {
-		const prefix = `[UCM][onboarding][${(/* @__PURE__ */ new Date()).toISOString()}] ${message}`;
-		if (details !== void 0) console[level](prefix, details);
-		else console[level](prefix);
+		logDiagnostic(level === "error" ? "error" : level === "warn" ? "warn" : "info", "onboarding", message, details);
 	}
 	function isOnboardingRoute() {
 		return isOnboardingEligibleRoute(window.location.href);
@@ -423,6 +657,7 @@
           />
 
           <button id="ucm-onboarding-submit" type="submit">Connect</button>
+          <button id="ucm-onboarding-copy-diagnostics" class="ucm-secondary-button" type="button">Copy Diagnostics</button>
           <p id="ucm-onboarding-status" class="ucm-onboarding-status" aria-live="polite"></p>
         </form>
       </div>
@@ -504,6 +739,7 @@
 	function bindFormIfNeeded() {
 		const form = document.getElementById("ucm-onboarding-form");
 		const apiKeyInput = document.getElementById("ucm-api-key");
+		const copyDiagnosticsButton = document.getElementById("ucm-onboarding-copy-diagnostics");
 		if (!form || !apiKeyInput) {
 			logOnboarding("bindFormIfNeeded skipped: missing form or API key input", {
 				hasForm: Boolean(form),
@@ -519,6 +755,16 @@
 		form.dataset.ucmBound = "1";
 		apiKeyInput.focus();
 		logOnboarding("bindFormIfNeeded attached submit listener");
+		copyDiagnosticsButton?.addEventListener("click", async () => {
+			try {
+				await navigator.clipboard.writeText(serializeDiagnostics());
+				logOnboarding("diagnostics copied");
+				setStatus("Diagnostics copied.", "success");
+			} catch (err) {
+				logOnboarding("diagnostics copy failed", { message: err?.message || "unknown error" }, "warn");
+				setStatus("Unable to copy diagnostics. Use console __UCM_DIAGNOSTICS__.text().", "error");
+			}
+		});
 		form.addEventListener("submit", async (event) => {
 			event.preventDefault();
 			const apiKey = apiKeyInput.value.trim();
@@ -856,6 +1102,7 @@
     }
 
     #ucm-chain-panel-root .ucm-secondary-button,
+    #ucm-onboarding-modal .ucm-secondary-button,
     #ucm-chain-panel-root .ucm-command-modal-card .ucm-secondary-button,
     #ucm-chain-panel-root .ucm-detail-tab {
       padding: 11px 14px;
@@ -1382,6 +1629,104 @@
       gap: 8px;
     }
 
+    #ucm-chain-panel-root .ucm-diagnostics-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-kv {
+      min-width: 0;
+      padding: 10px;
+      border-radius: 12px;
+      background: rgba(7, 13, 16, 0.54);
+      border: 1px solid rgba(180, 210, 218, 0.08);
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-kv span {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--ucm-text-faint);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-kv strong {
+      display: block;
+      min-width: 0;
+      color: var(--ucm-text-main);
+      font-size: 12px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-log {
+      display: grid;
+      gap: 8px;
+      max-height: 340px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-entry {
+      display: grid;
+      grid-template-columns: auto auto minmax(0, 1fr);
+      gap: 6px;
+      align-items: baseline;
+      padding: 9px 10px;
+      border-radius: 12px;
+      background: rgba(7, 13, 16, 0.56);
+      border: 1px solid rgba(180, 210, 218, 0.08);
+      color: var(--ucm-text-muted);
+      font-size: 11px;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-entry span {
+      color: var(--ucm-text-faint);
+      font-variant-numeric: tabular-nums;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-entry b {
+      color: var(--ucm-text-main);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 10px;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-entry p {
+      min-width: 0;
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-entry code {
+      grid-column: 1 / -1;
+      display: block;
+      padding: 6px 8px;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.24);
+      color: var(--ucm-text-muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-entry-ok {
+      border-color: rgba(157, 242, 187, 0.18);
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-entry-warn {
+      border-color: rgba(242, 182, 109, 0.22);
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-entry-error {
+      border-color: rgba(255, 125, 115, 0.28);
+    }
+
     #ucm-chain-panel-root .ucm-member-stat-grid span {
       display: grid;
       gap: 2px;
@@ -1507,16 +1852,16 @@
 	var disposed = false;
 	var onEventCallback = null;
 	var lastEventId = 0;
-	function getUserscriptRequest() {
-		if (typeof GM_xmlhttpRequest === "function") return GM_xmlhttpRequest;
-		if (typeof GM !== "undefined" && typeof GM.xmlHttpRequest === "function") return GM.xmlHttpRequest.bind(GM);
-		return null;
-	}
 	function scheduleReconnect() {
 		if (disposed) return;
 		const base = Math.min(1e3 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
 		const jitter = Math.floor(Math.random() * 500);
 		reconnectAttempts += 1;
+		setSseStatus("reconnecting", {
+			reconnectAttempts,
+			delayMs: base + jitter,
+			lastEventId
+		});
 		setTimeout(() => {
 			if (!disposed) openStream();
 		}, base + jitter);
@@ -1545,14 +1890,21 @@
 			const parsedId = parseInt(id, 10) || 0;
 			if (parsedId > lastEventId) lastEventId = parsedId;
 			onEventCallback(eventType, parsed, parsedId);
+			logDiagnostic("ok", "sse", `event ${eventType}`, {
+				eventId: parsedId,
+				lastEventId
+			});
 		} catch (err) {
-			console.warn("[UCM] Failed to parse SSE event:", err);
+			logDiagnostic("warn", "sse", "failed to parse SSE event", { message: err?.message || "unknown error" });
 		}
 	}
 	function openStream() {
-		const gmRequest = getUserscriptRequest();
+		const gmRequest = getStreamingUserscriptRequest();
 		if (!gmRequest) {
-			console.error("[UCM] GM_xmlhttpRequest unavailable; cannot open SSE stream.");
+			setSseStatus("error", {
+				message: "Streaming userscript transport unavailable. TornPDA may not expose GM_xmlhttpRequest for SSE.",
+				hasPdaHttpGet: typeof PDA_httpGet === "function"
+			});
 			return;
 		}
 		const url = `${CONFIG.BACKEND_URL}/events/stream?token=${encodeURIComponent(state.sessionToken)}`;
@@ -1563,7 +1915,7 @@
 			if (announcedOpen) return;
 			announcedOpen = true;
 			reconnectAttempts = 0;
-			console.log("[UCM] SSE connected");
+			setSseStatus("connected", { lastEventId });
 		};
 		const ingest = (response) => {
 			const text = response?.responseText || "";
@@ -1596,17 +1948,17 @@
 			onload: (response) => {
 				ingest(response);
 				if (disposed) return;
-				console.warn("[UCM] SSE stream ended, reconnecting...");
+				logDiagnostic("warn", "sse", "SSE stream ended", { lastEventId });
 				scheduleReconnect();
 			},
 			onerror: () => {
 				if (disposed) return;
-				console.warn("[UCM] SSE connection error, reconnecting...");
+				logDiagnostic("warn", "sse", "SSE connection error", { lastEventId });
 				scheduleReconnect();
 			},
 			ontimeout: () => {
 				if (disposed) return;
-				console.warn("[UCM] SSE timed out, reconnecting...");
+				logDiagnostic("warn", "sse", "SSE timed out", { lastEventId });
 				scheduleReconnect();
 			}
 		});
@@ -1616,6 +1968,7 @@
 		onEventCallback = onEvent;
 		disposed = false;
 		reconnectAttempts = 0;
+		setSseStatus("connecting", { lastEventId });
 		if (currentRequest && typeof currentRequest.abort === "function") try {
 			currentRequest.abort();
 		} catch {}
@@ -1625,6 +1978,7 @@
 	function disconnectSSE() {
 		disposed = true;
 		reconnectAttempts = 0;
+		setSseStatus("disconnected", { lastEventId });
 		if (currentRequest && typeof currentRequest.abort === "function") try {
 			currentRequest.abort();
 		} catch {}
@@ -1730,6 +2084,7 @@
 	//#region src/dom/attack-button.js
 	var blockedButtonRef = null;
 	var clickGuardInstalled = false;
+	var lastMissingButtonLogAt = 0;
 	/**
 	* Block the attack button: disable it, mark it, show tooltip and banner.
 	*/
@@ -1740,10 +2095,14 @@
 		}
 		const btn = findAttackButton();
 		if (!btn) {
-			console.debug("[UCM] Attack page detected, but no attack button found yet.");
+			const now = Date.now();
+			if (now - lastMissingButtonLogAt > 5e3) {
+				lastMissingButtonLogAt = now;
+				logDiagnostic("info", "attack", "attack page detected, but no attack button found yet");
+			}
 			return;
 		}
-		if (!(btn.getAttribute("data-ucm-blocked") === "true" && btn.disabled && btn.getAttribute("aria-disabled") === "true")) console.log("Blocking attack button");
+		if (!(btn.getAttribute("data-ucm-blocked") === "true" && btn.disabled && btn.getAttribute("aria-disabled") === "true")) logDiagnostic("ok", "attack", "blocking attack button");
 		btn.disabled = true;
 		btn.setAttribute("data-ucm-blocked", "true");
 		btn.title = "Blocked by Ultimate Chain Manager";
@@ -1769,6 +2128,7 @@
 		btn.style.pointerEvents = "";
 		btn.removeAttribute("aria-disabled");
 		blockedButtonRef = null;
+		logDiagnostic("ok", "attack", "unblocking attack button");
 		removeBanner();
 	}
 	/**
@@ -1805,6 +2165,7 @@
 			const button = event.target instanceof Element ? event.target.closest("button") : null;
 			if (!button) return;
 			if (button.getAttribute("data-ucm-blocked") === "true" || button.textContent.trim().toLowerCase() === "start fight") {
+				logDiagnostic("warn", "attack", "blocked attack click intercepted");
 				event.preventDefault();
 				event.stopPropagation();
 				event.stopImmediatePropagation();
@@ -1819,6 +2180,7 @@
 			const blockedButton = findAttackButton();
 			if (!blockedButton) return;
 			if (!form.contains(blockedButton)) return;
+			logDiagnostic("warn", "attack", "blocked attack form submit intercepted");
 			event.preventDefault();
 			event.stopPropagation();
 			event.stopImmediatePropagation();
@@ -1873,7 +2235,7 @@
 				handleDefenseAlert(payload);
 				break;
 			case "presence.updated": break;
-			default: console.log("[UCM] Unknown event type:", type);
+			default: logDiagnostic("warn", "events", "unknown event type", { type });
 		}
 	}
 	function handleHoldAll(payload) {
@@ -2153,6 +2515,7 @@
 			button: document.getElementById("ucm-chain-panel-button"),
 			close: document.getElementById("ucm-chain-panel-close"),
 			refresh: document.getElementById("ucm-chain-panel-refresh"),
+			diagnostics: document.getElementById("ucm-chain-panel-diagnostics"),
 			status: document.getElementById("ucm-chain-panel-status"),
 			addChain: document.getElementById("ucm-add-chain-button"),
 			back: document.getElementById("ucm-back-to-chains"),
@@ -2210,6 +2573,7 @@
             <h2>UCM</h2>
           </div>
           <div class="u-flex u-gap-2">
+            <button id="ucm-chain-panel-diagnostics" class="ucm-modal-close" type="button" aria-label="Diagnostics" title="Diagnostics">i</button>
             <button id="ucm-chain-panel-refresh" class="ucm-modal-close" type="button" aria-label="Refresh" title="Refresh">\u21BB</button>
             <button id="ucm-chain-panel-close" class="ucm-modal-close" type="button" aria-label="Close">\u00D7</button>
           </div>
@@ -2234,6 +2598,69 @@
         </div>
       </div>
     </div>
+  `;
+	}
+	function formatPlatformValue(value) {
+		if (value === true) return "yes";
+		if (value === false) return "no";
+		if (value == null || value === "") return "—";
+		return String(value);
+	}
+	function buildDiagnosticsHTML() {
+		const platform = getPlatformInfo();
+		const entries = getDiagnosticsEntries().slice(-80).reverse();
+		return `
+    <div class="ucm-panel-toolbar u-flex u-items-start u-justify-between u-gap-ucm-2 u-flex-wrap">
+      <button id="ucm-back-to-chains-secondary" class="ucm-secondary-button" type="button">\u2190 Chains</button>
+      <span class="ucm-status-pill">Diagnostics</span>
+    </div>
+    <section class="ucm-subsection-card">
+      <div class="u-flex u-items-center u-justify-between u-gap-ucm-2 u-flex-wrap">
+        <h3>Diagnostics</h3>
+        <div class="u-flex u-gap-2">
+          <button id="ucm-diagnostics-copy" class="ucm-secondary-button" type="button">Copy</button>
+          <button id="ucm-diagnostics-clear" class="ucm-secondary-button" type="button">Clear</button>
+        </div>
+      </div>
+      <div class="ucm-diagnostics-grid">
+        ${[
+			["Platform", platform.platform],
+			["Backend", platform.backendUrl],
+			["Script", platform.scriptVersion],
+			["Transport", platform.lastTransport],
+			["SSE", platform.sseStatus],
+			["Session", platform.hasSessionToken ? `present (${platform.sessionTokenLength})` : "missing"],
+			["Member", platform.memberId],
+			["Faction", platform.factionId],
+			["PDA GET", platform.hasPdaGet],
+			["PDA POST", platform.hasPdaPost],
+			["GM XHR", platform.hasGmXmlHttpRequest || platform.hasGmNamespaceRequest],
+			["Fetch", platform.hasFetch]
+		].map(([label, value]) => `
+    <div class="ucm-diagnostics-kv">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(formatPlatformValue(value))}</strong>
+    </div>
+  `).join("")}
+      </div>
+    </section>
+    <section class="ucm-subsection-card">
+      <h4>Recent Events</h4>
+      <div class="ucm-diagnostics-log">
+        ${entries.length ? entries.map((entry) => {
+			const time = entry.ts ? new Date(entry.ts).toLocaleTimeString() : "";
+			const details = entry.details === void 0 ? "" : `<code>${escapeHtml(JSON.stringify(entry.details))}</code>`;
+			return `
+      <div class="ucm-diagnostics-entry ucm-diagnostics-entry-${escapeHtml(entry.level)}">
+        <span>${escapeHtml(time)}</span>
+        <b>${escapeHtml(entry.area)}</b>
+        <p>${escapeHtml(entry.message)}</p>
+        ${details}
+      </div>
+    `;
+		}).join("") : "<p class=\"ucm-section-copy\">No diagnostics recorded yet.</p>"}
+      </div>
+    </section>
   `;
 	}
 	function commandButton(action, icon, label, description, danger = false) {
@@ -2472,6 +2899,9 @@
 	async function renderDetailView(chainId) {
 		return renderIntoRoot(await renderChainDetailHTML(chainId));
 	}
+	async function renderDiagnosticsView() {
+		return renderIntoRoot(buildPanelShell(buildDiagnosticsHTML(), "diagnostics"));
+	}
 	async function renderDefaultView() {
 		const current = await getCurrentChain();
 		const liveStatuses = new Set([
@@ -2598,7 +3028,7 @@
 			if (shell) shell.hidden = false;
 			bindEvents(true);
 		} catch (error) {
-			console.error("[UCM] Unable to open chain panel:", error?.message || error);
+			logDiagnostic("error", "ui", "unable to open chain panel", { message: error?.message || "unknown error" });
 		}
 	}
 	async function refreshCurrentView() {
@@ -2744,16 +3174,31 @@
 		}
 	}
 	function bindEvents(force = false) {
-		const { root, button, close, refresh, addChain, back, backSecondary, createForm, rsvpForm, rsvpEdit, commandButtons, commandModal, commandModalClose, commandModalCancel, commandModalForm, chainButtons, shell, sectionTabs } = getElements();
+		const { root, button, close, refresh, diagnostics, addChain, back, backSecondary, createForm, rsvpForm, rsvpEdit, commandButtons, commandModal, commandModalClose, commandModalCancel, commandModalForm, chainButtons, shell, sectionTabs } = getElements();
 		if (!root || !force && root.dataset.ucmBound === "1") return;
 		root.dataset.ucmBound = "1";
 		button?.addEventListener("click", openPanel);
 		close?.addEventListener("click", closePanel);
 		refresh?.addEventListener("click", async () => {
 			try {
-				await refreshCurrentView();
+				if (getCurrentView() === "diagnostics") {
+					await renderDiagnosticsView();
+					const { shell: nextShell } = getElements();
+					if (nextShell) nextShell.hidden = false;
+					bindEvents(true);
+				} else await refreshCurrentView();
 			} catch (error) {
 				setChainPanelStatus(error?.message || "Unable to refresh view.", "error");
+			}
+		});
+		diagnostics?.addEventListener("click", async () => {
+			try {
+				await renderDiagnosticsView();
+				const { shell: nextShell } = getElements();
+				if (nextShell) nextShell.hidden = false;
+				bindEvents(true);
+			} catch (error) {
+				setChainPanelStatus(error?.message || "Unable to open diagnostics.", "error");
 			}
 		});
 		addChain?.addEventListener("click", async () => {
@@ -2778,6 +3223,25 @@
 		};
 		back?.addEventListener("click", backToList);
 		backSecondary?.addEventListener("click", backToList);
+		document.getElementById("ucm-diagnostics-clear")?.addEventListener("click", async () => {
+			clearDiagnostics();
+			logDiagnostic("info", "diagnostics", "diagnostics cleared");
+			await renderDiagnosticsView();
+			const { shell: nextShell } = getElements();
+			if (nextShell) nextShell.hidden = false;
+			bindEvents(true);
+		});
+		document.getElementById("ucm-diagnostics-copy")?.addEventListener("click", async () => {
+			const text = serializeDiagnostics();
+			try {
+				await navigator.clipboard.writeText(text);
+				setChainPanelStatus("Diagnostics copied.", "success");
+				logDiagnostic("ok", "diagnostics", "diagnostics copied");
+			} catch (error) {
+				setChainPanelStatus("Unable to copy diagnostics. Use console __UCM_DIAGNOSTICS__.text().", "error");
+				logDiagnostic("warn", "diagnostics", "diagnostics copy failed", { message: error?.message || "unknown error" });
+			}
+		});
 		for (const chainButton of chainButtons) chainButton.addEventListener("click", async () => {
 			try {
 				activeDetailSection = DEFAULT_DETAIL_SECTION;
@@ -2826,7 +3290,7 @@
 			bindEvents();
 			return root;
 		} catch (error) {
-			console.error("[UCM] Unable to render chain panel:", error?.message || error);
+			logDiagnostic("error", "ui", "unable to render chain panel", { message: error?.message || "unknown error" });
 			return null;
 		}
 	}
@@ -2873,7 +3337,7 @@
 		"use strict";
 		if (window.__UCM_INITIALIZED__) return;
 		window.__UCM_INITIALIZED__ = true;
-		console.log("[UCM] Ultimate Chain Manager initializing...", {
+		logDiagnostic("info", "startup", "Ultimate Chain Manager initializing", {
 			href: window.location.href,
 			readyState: document.readyState,
 			backendUrl: CONFIG.BACKEND_URL,
@@ -2886,10 +3350,10 @@
 		if (storedPerms) try {
 			state.permissions = JSON.parse(storedPerms);
 		} catch (e) {
-			console.warn("[UCM] Failed to parse stored permissions JSON; resetting permissions.", { error: e?.message || "unknown" });
+			logDiagnostic("warn", "startup", "failed to parse stored permissions JSON; resetting permissions", { error: e?.message || "unknown" });
 			state.permissions = [];
 		}
-		console.log("[UCM] Session bootstrap state", {
+		logDiagnostic("info", "startup", "session bootstrap state", {
 			hasSessionToken: hasValidSessionToken(state.sessionToken),
 			sessionTokenLength: state.sessionToken?.length || 0,
 			memberId: state.memberId || null,
@@ -2898,7 +3362,7 @@
 		});
 		injectStyles();
 		if (!hasValidSessionToken(state.sessionToken)) {
-			console.log("[UCM] No valid session found. Watching onboarding route...", {
+			logDiagnostic("info", "startup", "no valid session found; watching onboarding route", {
 				href: window.location.href,
 				hasSessionToken: false,
 				isTopWindow: window.top === window.self
@@ -2907,7 +3371,7 @@
 			return;
 		}
 		if (window.top !== window.self) {
-			console.log("[UCM] Session found, but skipping active controls in embedded context.");
+			logDiagnostic("info", "startup", "session found, but skipping active controls in embedded context");
 			return;
 		}
 		installAttackClickGuard(isBlocked);
@@ -2918,13 +3382,13 @@
 			state.commandMode = chain?.commandMode || "free";
 			initChainPanel().finally(() => {
 				if (chain?.status === "active") connectSSE(handleEvent);
-				else console.log("[UCM] SSE stream deferred until a chain is active.", { currentChainStatus: chain?.status || null });
+				else logDiagnostic("info", "sse", "SSE stream deferred until a chain is active", { currentChainStatus: chain?.status || null });
 			});
 			initMutationObserver();
 			if (isAttackPage()) reapplyIfNeeded(isBlocked());
-			console.log("[UCM] Initialized successfully.");
+			logDiagnostic("ok", "startup", "initialized successfully");
 		}).catch((error) => {
-			console.error("[UCM] Unable to sync current chain state:", error?.message || error);
+			logDiagnostic("error", "startup", "unable to sync current chain state", { message: error?.message || "unknown error" });
 			initChainPanel();
 			initMutationObserver();
 			if (isAttackPage()) reapplyIfNeeded(isBlocked());

@@ -1,6 +1,6 @@
 {
   "name": "torn-ucm-userscript",
-  "version": "2.0.0",
+  "version": "0.0.1",
   "type": "module",
   "description": "Torn UCM - Ultimate Chain Manager userscript",
   "scripts": {

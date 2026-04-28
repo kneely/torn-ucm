@@ -2,6 +2,7 @@ import 'virtual:uno.css';
 import { CONFIG } from './config.js';
 import { state } from './state/store.js';
 import { storageGet } from './lib/storage.js';
+import { logDiagnostic } from './lib/diagnostics.js';
 import { normalizeSessionToken, hasValidSessionToken, initOnboardingRouteWatcherForTornPda } from './ui/onboarding.js';
 import { injectStyles } from './ui/styles.js';
 import { initChainPanel } from './ui/chain-panel.js';
@@ -28,7 +29,7 @@ import { isBlocked } from './state/store.js';
   if (window.__UCM_INITIALIZED__) return;
   window.__UCM_INITIALIZED__ = true;
 
-  console.log('[UCM] Ultimate Chain Manager initializing...', {
+  logDiagnostic('info', 'startup', 'Ultimate Chain Manager initializing', {
     href: window.location.href,
     readyState: document.readyState,
     backendUrl: CONFIG.BACKEND_URL,
@@ -45,14 +46,14 @@ import { isBlocked } from './state/store.js';
     try {
       state.permissions = JSON.parse(storedPerms);
     } catch (e) {
-      console.warn('[UCM] Failed to parse stored permissions JSON; resetting permissions.', {
+      logDiagnostic('warn', 'startup', 'failed to parse stored permissions JSON; resetting permissions', {
         error: e?.message || 'unknown',
       });
       state.permissions = [];
     }
   }
 
-  console.log('[UCM] Session bootstrap state', {
+  logDiagnostic('info', 'startup', 'session bootstrap state', {
     hasSessionToken: hasValidSessionToken(state.sessionToken),
     sessionTokenLength: state.sessionToken?.length || 0,
     memberId: state.memberId || null,
@@ -64,7 +65,7 @@ import { isBlocked } from './state/store.js';
   injectStyles();
 
   if (!hasValidSessionToken(state.sessionToken)) {
-    console.log('[UCM] No valid session found. Watching onboarding route...', {
+    logDiagnostic('info', 'startup', 'no valid session found; watching onboarding route', {
       href: window.location.href,
       hasSessionToken: false,
       isTopWindow: window.top === window.self,
@@ -74,7 +75,7 @@ import { isBlocked } from './state/store.js';
   }
 
   if (window.top !== window.self) {
-    console.log('[UCM] Session found, but skipping active controls in embedded context.');
+    logDiagnostic('info', 'startup', 'session found, but skipping active controls in embedded context');
     return;
   }
 
@@ -92,7 +93,7 @@ import { isBlocked } from './state/store.js';
           if (chain?.status === 'active') {
             connectSSE(handleEvent);
           } else {
-            console.log('[UCM] SSE stream deferred until a chain is active.', {
+            logDiagnostic('info', 'sse', 'SSE stream deferred until a chain is active', {
               currentChainStatus: chain?.status || null,
             });
           }
@@ -105,10 +106,12 @@ import { isBlocked } from './state/store.js';
         reapplyIfNeeded(isBlocked());
       }
 
-      console.log('[UCM] Initialized successfully.');
+      logDiagnostic('ok', 'startup', 'initialized successfully');
     })
     .catch((error) => {
-      console.error('[UCM] Unable to sync current chain state:', error?.message || error);
+      logDiagnostic('error', 'startup', 'unable to sync current chain state', {
+        message: error?.message || 'unknown error',
+      });
       initChainPanel();
       initMutationObserver();
       if (isAttackPage()) {

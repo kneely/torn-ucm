@@ -14,6 +14,13 @@ import {
 import { connectSSE, disconnectSSE } from '../api/sse-client.js';
 import { handleEvent } from '../events/handler.js';
 import { state } from '../state/store.js';
+import {
+  clearDiagnostics,
+  getDiagnosticsEntries,
+  getPlatformInfo,
+  logDiagnostic,
+  serializeDiagnostics,
+} from '../lib/diagnostics.js';
 import { showNotification } from './notifications.js';
 import { renderChainListHTML } from './chain-list.js';
 import { renderChainCreateHTML, submitChainCreate } from './chain-create.js';
@@ -85,6 +92,7 @@ function getElements() {
     button: document.getElementById('ucm-chain-panel-button'),
     close: document.getElementById('ucm-chain-panel-close'),
     refresh: document.getElementById('ucm-chain-panel-refresh'),
+    diagnostics: document.getElementById('ucm-chain-panel-diagnostics'),
     status: document.getElementById('ucm-chain-panel-status'),
     addChain: document.getElementById('ucm-add-chain-button'),
     back: document.getElementById('ucm-back-to-chains'),
@@ -152,6 +160,7 @@ function buildPanelShell(innerHTML, view = 'list', chainId = '') {
             <h2>UCM</h2>
           </div>
           <div class="u-flex u-gap-2">
+            <button id="ucm-chain-panel-diagnostics" class="ucm-modal-close" type="button" aria-label="Diagnostics" title="Diagnostics">i</button>
             <button id="ucm-chain-panel-refresh" class="ucm-modal-close" type="button" aria-label="Refresh" title="Refresh">\u21BB</button>
             <button id="ucm-chain-panel-close" class="ucm-modal-close" type="button" aria-label="Close">\u00D7</button>
           </div>
@@ -176,6 +185,75 @@ function buildPanelShell(innerHTML, view = 'list', chainId = '') {
         </div>
       </div>
     </div>
+  `;
+}
+
+function formatPlatformValue(value) {
+  if (value === true) return 'yes';
+  if (value === false) return 'no';
+  if (value == null || value === '') return '\u2014';
+  return String(value);
+}
+
+function buildDiagnosticsHTML() {
+  const platform = getPlatformInfo();
+  const entries = getDiagnosticsEntries().slice(-80).reverse();
+  const platformRows = [
+    ['Platform', platform.platform],
+    ['Backend', platform.backendUrl],
+    ['Script', platform.scriptVersion],
+    ['Transport', platform.lastTransport],
+    ['SSE', platform.sseStatus],
+    ['Session', platform.hasSessionToken ? `present (${platform.sessionTokenLength})` : 'missing'],
+    ['Member', platform.memberId],
+    ['Faction', platform.factionId],
+    ['PDA GET', platform.hasPdaGet],
+    ['PDA POST', platform.hasPdaPost],
+    ['GM XHR', platform.hasGmXmlHttpRequest || platform.hasGmNamespaceRequest],
+    ['Fetch', platform.hasFetch],
+  ].map(([label, value]) => `
+    <div class="ucm-diagnostics-kv">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(formatPlatformValue(value))}</strong>
+    </div>
+  `).join('');
+
+  const logRows = entries.length ? entries.map((entry) => {
+    const time = entry.ts ? new Date(entry.ts).toLocaleTimeString() : '';
+    const details = entry.details === undefined ? '' : `<code>${escapeHtml(JSON.stringify(entry.details))}</code>`;
+    return `
+      <div class="ucm-diagnostics-entry ucm-diagnostics-entry-${escapeHtml(entry.level)}">
+        <span>${escapeHtml(time)}</span>
+        <b>${escapeHtml(entry.area)}</b>
+        <p>${escapeHtml(entry.message)}</p>
+        ${details}
+      </div>
+    `;
+  }).join('') : '<p class="ucm-section-copy">No diagnostics recorded yet.</p>';
+
+  return `
+    <div class="ucm-panel-toolbar u-flex u-items-start u-justify-between u-gap-ucm-2 u-flex-wrap">
+      <button id="ucm-back-to-chains-secondary" class="ucm-secondary-button" type="button">\u2190 Chains</button>
+      <span class="ucm-status-pill">Diagnostics</span>
+    </div>
+    <section class="ucm-subsection-card">
+      <div class="u-flex u-items-center u-justify-between u-gap-ucm-2 u-flex-wrap">
+        <h3>Diagnostics</h3>
+        <div class="u-flex u-gap-2">
+          <button id="ucm-diagnostics-copy" class="ucm-secondary-button" type="button">Copy</button>
+          <button id="ucm-diagnostics-clear" class="ucm-secondary-button" type="button">Clear</button>
+        </div>
+      </div>
+      <div class="ucm-diagnostics-grid">
+        ${platformRows}
+      </div>
+    </section>
+    <section class="ucm-subsection-card">
+      <h4>Recent Events</h4>
+      <div class="ucm-diagnostics-log">
+        ${logRows}
+      </div>
+    </section>
   `;
 }
 
@@ -459,6 +537,11 @@ async function renderDetailView(chainId) {
   return renderIntoRoot(html);
 }
 
+async function renderDiagnosticsView() {
+  const html = buildPanelShell(buildDiagnosticsHTML(), 'diagnostics');
+  return renderIntoRoot(html);
+}
+
 async function renderDefaultView() {
   const current = await getCurrentChain();
   const liveStatuses = new Set(['active', 'forming', 'scheduled']);
@@ -604,7 +687,9 @@ async function openPanel() {
     if (shell) shell.hidden = false;
     bindEvents(true);
   } catch (error) {
-    console.error('[UCM] Unable to open chain panel:', error?.message || error);
+    logDiagnostic('error', 'ui', 'unable to open chain panel', {
+      message: error?.message || 'unknown error',
+    });
   }
 }
 
@@ -787,6 +872,7 @@ function bindEvents(force = false) {
     button,
     close,
     refresh,
+    diagnostics,
     addChain,
     back,
     backSecondary,
@@ -810,9 +896,26 @@ function bindEvents(force = false) {
   close?.addEventListener('click', closePanel);
   refresh?.addEventListener('click', async () => {
     try {
-      await refreshCurrentView();
+      if (getCurrentView() === 'diagnostics') {
+        await renderDiagnosticsView();
+        const { shell: nextShell } = getElements();
+        if (nextShell) nextShell.hidden = false;
+        bindEvents(true);
+      } else {
+        await refreshCurrentView();
+      }
     } catch (error) {
       setChainPanelStatus(error?.message || 'Unable to refresh view.', 'error');
+    }
+  });
+  diagnostics?.addEventListener('click', async () => {
+    try {
+      await renderDiagnosticsView();
+      const { shell: nextShell } = getElements();
+      if (nextShell) nextShell.hidden = false;
+      bindEvents(true);
+    } catch (error) {
+      setChainPanelStatus(error?.message || 'Unable to open diagnostics.', 'error');
     }
   });
   addChain?.addEventListener('click', async () => {
@@ -839,6 +942,29 @@ function bindEvents(force = false) {
 
   back?.addEventListener('click', backToList);
   backSecondary?.addEventListener('click', backToList);
+
+  document.getElementById('ucm-diagnostics-clear')?.addEventListener('click', async () => {
+    clearDiagnostics();
+    logDiagnostic('info', 'diagnostics', 'diagnostics cleared');
+    await renderDiagnosticsView();
+    const { shell: nextShell } = getElements();
+    if (nextShell) nextShell.hidden = false;
+    bindEvents(true);
+  });
+
+  document.getElementById('ucm-diagnostics-copy')?.addEventListener('click', async () => {
+    const text = serializeDiagnostics();
+    try {
+      await navigator.clipboard.writeText(text);
+      setChainPanelStatus('Diagnostics copied.', 'success');
+      logDiagnostic('ok', 'diagnostics', 'diagnostics copied');
+    } catch (error) {
+      setChainPanelStatus('Unable to copy diagnostics. Use console __UCM_DIAGNOSTICS__.text().', 'error');
+      logDiagnostic('warn', 'diagnostics', 'diagnostics copy failed', {
+        message: error?.message || 'unknown error',
+      });
+    }
+  });
 
   for (const chainButton of chainButtons) {
     chainButton.addEventListener('click', async () => {
@@ -908,7 +1034,9 @@ export async function initChainPanel() {
     bindEvents();
     return root;
   } catch (error) {
-    console.error('[UCM] Unable to render chain panel:', error?.message || error);
+    logDiagnostic('error', 'ui', 'unable to render chain panel', {
+      message: error?.message || 'unknown error',
+    });
     return null;
   }
 }

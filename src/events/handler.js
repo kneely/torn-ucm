@@ -1,6 +1,7 @@
 import { state } from '../state/store.js';
 import { blockButton, unblockButton } from '../dom/attack-button.js';
 import { showBanner, removeBanner } from '../dom/banner.js';
+import { logDiagnostic } from '../lib/diagnostics.js';
 import { showNotification } from '../ui/notifications.js';
 
 /**
@@ -43,7 +44,7 @@ export function handleEvent(type, payload, eventId) {
       break;
 
     default:
-      console.log('[UCM] Unknown event type:', type);
+      logDiagnostic('warn', 'events', 'unknown event type', { type });
   }
 }
 

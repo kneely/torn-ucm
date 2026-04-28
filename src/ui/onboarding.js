@@ -1,6 +1,7 @@
 import { CONFIG } from '../config.js';
 import { onboard } from '../api/client.js';
 import { saveSession } from '../state/store.js';
+import { logDiagnostic, serializeDiagnostics } from '../lib/diagnostics.js';
 import { storageGet, storageSet } from '../lib/storage.js';
 
 const MODAL_ID = 'ucm-onboarding-modal';
@@ -36,14 +37,8 @@ export function isOnboardingEligibleRoute(locationHref = '') {
 }
 
 function logOnboarding(message, details = undefined, level = 'log') {
-  const ts = new Date().toISOString();
-  const prefix = `[UCM][onboarding][${ts}] ${message}`;
-
-  if (details !== undefined) {
-    console[level](prefix, details);
-  } else {
-    console[level](prefix);
-  }
+  const diagnosticLevel = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info';
+  logDiagnostic(diagnosticLevel, 'onboarding', message, details);
 }
 
 function isOnboardingRoute() {
@@ -70,6 +65,7 @@ function createModalMarkup() {
           />
 
           <button id="ucm-onboarding-submit" type="submit">Connect</button>
+          <button id="ucm-onboarding-copy-diagnostics" class="ucm-secondary-button" type="button">Copy Diagnostics</button>
           <p id="ucm-onboarding-status" class="ucm-onboarding-status" aria-live="polite"></p>
         </form>
       </div>
@@ -176,6 +172,7 @@ async function submitOnboarding(apiKey) {
 function bindFormIfNeeded() {
   const form = document.getElementById('ucm-onboarding-form');
   const apiKeyInput = document.getElementById('ucm-api-key');
+  const copyDiagnosticsButton = document.getElementById('ucm-onboarding-copy-diagnostics');
 
   if (!form || !apiKeyInput) {
     logOnboarding('bindFormIfNeeded skipped: missing form or API key input', {
@@ -194,6 +191,19 @@ function bindFormIfNeeded() {
   form.dataset.ucmBound = '1';
   apiKeyInput.focus();
   logOnboarding('bindFormIfNeeded attached submit listener');
+
+  copyDiagnosticsButton?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(serializeDiagnostics());
+      logOnboarding('diagnostics copied');
+      setStatus('Diagnostics copied.', 'success');
+    } catch (err) {
+      logOnboarding('diagnostics copy failed', {
+        message: err?.message || 'unknown error',
+      }, 'warn');
+      setStatus('Unable to copy diagnostics. Use console __UCM_DIAGNOSTICS__.text().', 'error');
+    }
+  });
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();

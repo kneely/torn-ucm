@@ -234,6 +234,7 @@ export function injectStyles() {
     }
 
     #ucm-chain-panel-root .ucm-secondary-button,
+    #ucm-onboarding-modal .ucm-secondary-button,
     #ucm-chain-panel-root .ucm-command-modal-card .ucm-secondary-button,
     #ucm-chain-panel-root .ucm-detail-tab {
       padding: 11px 14px;
@@ -758,6 +759,104 @@ export function injectStyles() {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-kv {
+      min-width: 0;
+      padding: 10px;
+      border-radius: 12px;
+      background: rgba(7, 13, 16, 0.54);
+      border: 1px solid rgba(180, 210, 218, 0.08);
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-kv span {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--ucm-text-faint);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-kv strong {
+      display: block;
+      min-width: 0;
+      color: var(--ucm-text-main);
+      font-size: 12px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-log {
+      display: grid;
+      gap: 8px;
+      max-height: 340px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-entry {
+      display: grid;
+      grid-template-columns: auto auto minmax(0, 1fr);
+      gap: 6px;
+      align-items: baseline;
+      padding: 9px 10px;
+      border-radius: 12px;
+      background: rgba(7, 13, 16, 0.56);
+      border: 1px solid rgba(180, 210, 218, 0.08);
+      color: var(--ucm-text-muted);
+      font-size: 11px;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-entry span {
+      color: var(--ucm-text-faint);
+      font-variant-numeric: tabular-nums;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-entry b {
+      color: var(--ucm-text-main);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 10px;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-entry p {
+      min-width: 0;
+      margin: 0;
+      overflow-wrap: anywhere;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-entry code {
+      grid-column: 1 / -1;
+      display: block;
+      padding: 6px 8px;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.24);
+      color: var(--ucm-text-muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 10px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-entry-ok {
+      border-color: rgba(157, 242, 187, 0.18);
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-entry-warn {
+      border-color: rgba(242, 182, 109, 0.22);
+    }
+
+    #ucm-chain-panel-root .ucm-diagnostics-entry-error {
+      border-color: rgba(255, 125, 115, 0.28);
     }
 
     #ucm-chain-panel-root .ucm-member-stat-grid span {

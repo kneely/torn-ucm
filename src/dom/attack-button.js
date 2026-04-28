@@ -1,9 +1,11 @@
 import { findAttackButton, isAttackPage } from './selectors.js';
 import { showBanner, removeBanner } from './banner.js';
 import { getBlockReason } from '../state/store.js';
+import { logDiagnostic } from '../lib/diagnostics.js';
 
 let blockedButtonRef = null;
 let clickGuardInstalled = false;
+let lastMissingButtonLogAt = 0;
 
 /**
  * Block the attack button: disable it, mark it, show tooltip and banner.
@@ -16,7 +18,11 @@ export function blockButton() {
 
   const btn = findAttackButton();
   if (!btn) {
-    console.debug('[UCM] Attack page detected, but no attack button found yet.');
+    const now = Date.now();
+    if (now - lastMissingButtonLogAt > 5000) {
+      lastMissingButtonLogAt = now;
+      logDiagnostic('info', 'attack', 'attack page detected, but no attack button found yet');
+    }
     return;
   }
 
@@ -25,7 +31,7 @@ export function blockButton() {
     && btn.getAttribute('aria-disabled') === 'true';
 
   if (!alreadyBlocked) {
-    console.log('Blocking attack button');
+    logDiagnostic('ok', 'attack', 'blocking attack button');
   }
 
   btn.disabled = true;
@@ -60,6 +66,7 @@ export function unblockButton() {
 
   blockedButtonRef = null;
 
+  logDiagnostic('ok', 'attack', 'unblocking attack button');
   removeBanner();
 }
 
@@ -116,6 +123,7 @@ export function installAttackClickGuard(isBlockedFn) {
     if (!button) return;
 
     if (button.getAttribute('data-ucm-blocked') === 'true' || button.textContent.trim().toLowerCase() === 'start fight') {
+      logDiagnostic('warn', 'attack', 'blocked attack click intercepted');
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
@@ -134,6 +142,7 @@ export function installAttackClickGuard(isBlockedFn) {
     if (!blockedButton) return;
     if (!form.contains(blockedButton)) return;
 
+    logDiagnostic('warn', 'attack', 'blocked attack form submit intercepted');
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
