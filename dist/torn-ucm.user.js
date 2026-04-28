@@ -6,8 +6,6 @@
 // @author       kneely
 // @match        https://www.torn.com/*
 // @grant        GM_xmlhttpRequest
-// @grant        GM_getValue
-// @grant        GM_setValue
 // @connect      ucm.neelyinno.com
 // @run-at       document-idle
 // ==/UserScript==
@@ -166,6 +164,11 @@
 			return String(value);
 		}
 	}
+	function formatConsoleDetails(details) {
+		if (details === void 0) return "";
+		const text = safeString(details);
+		return text ? ` ${text}` : "";
+	}
 	function redactUrl(value) {
 		if (!value) return "";
 		try {
@@ -202,9 +205,7 @@
 		entries.push(entry);
 		if (entries.length > MAX_ENTRIES) entries.shift();
 		const consoleMethod = getConsoleMethod(normalizedLevel);
-		const prefix = `[UCM][${entry.area}] ${entry.message}`;
-		if (entry.details !== void 0) console[consoleMethod](prefix, entry.details);
-		else console[consoleMethod](prefix);
+		console[consoleMethod](`[UCM][${entry.area}] ${entry.message}${formatConsoleDetails(entry.details)}`);
 		notify();
 		return entry;
 	}
@@ -312,6 +313,7 @@
 		return "";
 	}
 	function normalizeResponse(response, transport) {
+		if (!response) throw new Error(`${transport} returned an empty response.`);
 		const status = Number(response?.status || 0);
 		return {
 			ok: status >= 200 && status < 300,
@@ -2903,7 +2905,13 @@
 		return renderIntoRoot(buildPanelShell(buildDiagnosticsHTML(), "diagnostics"));
 	}
 	async function renderDefaultView() {
-		const current = await getCurrentChain();
+		let current;
+		try {
+			current = await getCurrentChain();
+		} catch (error) {
+			logDiagnostic("warn", "ui", "unable to load current chain for default view", { message: error?.message || "unknown error" });
+			return renderListView();
+		}
 		const liveStatuses = new Set([
 			"active",
 			"forming",
@@ -2912,7 +2920,16 @@
 		const currentChain = current?.chain;
 		if (currentChain?.id && liveStatuses.has(currentChain.status)) {
 			activeDetailSection = DEFAULT_DETAIL_SECTION;
-			return renderDetailView(currentChain.id);
+			try {
+				return await renderDetailView(currentChain.id);
+			} catch (error) {
+				logDiagnostic("warn", "ui", "unable to render current chain detail; falling back to chain list", {
+					chainId: currentChain.id,
+					status: currentChain.status,
+					message: error?.message || "unknown error"
+				});
+				return renderListView();
+			}
 		}
 		return renderListView();
 	}
@@ -3283,15 +3300,44 @@
 		if (getCurrentView() === "detail") applyDetailSection(activeDetailSection);
 	}
 	async function initChainPanel() {
-		if (!hasAnyChainControlPermission()) return null;
+		const root = await renderIntoRoot(buildPanelShell(`
+    <div class="ucm-empty-state">
+      <strong>Loading UCM</strong>
+      <p>Preparing chain controls.</p>
+    </div>
+  `, "loading"));
+		bindEvents(true);
+		if (!hasAnyChainControlPermission()) {
+			logDiagnostic("warn", "ui", "chain panel opened without chain-control permissions", {
+				permissionCount: Array.isArray(state.permissions) ? state.permissions.length : 0,
+				permissions: Array.isArray(state.permissions) ? state.permissions : []
+			});
+			await renderIntoRoot(buildPanelShell(`
+      <div class="ucm-empty-state">
+        <strong>UCM active</strong>
+        <p>No chain-control permissions are available in this session.</p>
+      </div>
+      ${buildDiagnosticsHTML()}
+    `, "diagnostics"));
+			bindEvents(true);
+			return document.getElementById(CHAIN_PANEL_ROOT_ID);
+		}
 		try {
-			const root = await renderDefaultView();
-			if (!root) return null;
+			const nextRoot = await renderDefaultView();
+			if (!nextRoot) return root;
 			bindEvents();
-			return root;
+			return nextRoot;
 		} catch (error) {
 			logDiagnostic("error", "ui", "unable to render chain panel", { message: error?.message || "unknown error" });
-			return null;
+			await renderIntoRoot(buildPanelShell(`
+      <div class="ucm-empty-state">
+        <strong>UCM panel error</strong>
+        <p>${escapeHtml(error?.message || "Unable to render chain controls.")}</p>
+      </div>
+      ${buildDiagnosticsHTML()}
+    `, "diagnostics"));
+			bindEvents(true);
+			return document.getElementById(CHAIN_PANEL_ROOT_ID);
 		}
 	}
 	//#endregion

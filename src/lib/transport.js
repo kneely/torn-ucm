@@ -45,6 +45,10 @@ function responseHeadersFrom(value) {
 }
 
 function normalizeResponse(response, transport) {
+  if (!response) {
+    throw new Error(`${transport} returned an empty response.`);
+  }
+
   const status = Number(response?.status || 0);
   return {
     ok: status >= 200 && status < 300,

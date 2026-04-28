@@ -43,6 +43,12 @@ function safeString(value) {
   }
 }
 
+function formatConsoleDetails(details) {
+  if (details === undefined) return '';
+  const text = safeString(details);
+  return text ? ` ${text}` : '';
+}
+
 export function redactUrl(value) {
   if (!value) return '';
 
@@ -90,12 +96,7 @@ export function logDiagnostic(level, area, message, details = undefined) {
   if (entries.length > MAX_ENTRIES) entries.shift();
 
   const consoleMethod = getConsoleMethod(normalizedLevel);
-  const prefix = `[UCM][${entry.area}] ${entry.message}`;
-  if (entry.details !== undefined) {
-    console[consoleMethod](prefix, entry.details);
-  } else {
-    console[consoleMethod](prefix);
-  }
+  console[consoleMethod](`[UCM][${entry.area}] ${entry.message}${formatConsoleDetails(entry.details)}`);
 
   notify();
   return entry;

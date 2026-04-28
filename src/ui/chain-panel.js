@@ -543,13 +543,31 @@ async function renderDiagnosticsView() {
 }
 
 async function renderDefaultView() {
-  const current = await getCurrentChain();
+  let current;
+  try {
+    current = await getCurrentChain();
+  } catch (error) {
+    logDiagnostic('warn', 'ui', 'unable to load current chain for default view', {
+      message: error?.message || 'unknown error',
+    });
+    return renderListView();
+  }
+
   const liveStatuses = new Set(['active', 'forming', 'scheduled']);
   const currentChain = current?.chain;
 
   if (currentChain?.id && liveStatuses.has(currentChain.status)) {
     activeDetailSection = DEFAULT_DETAIL_SECTION;
-    return renderDetailView(currentChain.id);
+    try {
+      return await renderDetailView(currentChain.id);
+    } catch (error) {
+      logDiagnostic('warn', 'ui', 'unable to render current chain detail; falling back to chain list', {
+        chainId: currentChain.id,
+        status: currentChain.status,
+        message: error?.message || 'unknown error',
+      });
+      return renderListView();
+    }
   }
 
   return renderListView();
@@ -1026,17 +1044,47 @@ function bindEvents(force = false) {
 }
 
 export async function initChainPanel() {
-  if (!hasAnyChainControlPermission()) return null;
+  const root = await renderIntoRoot(buildPanelShell(`
+    <div class="ucm-empty-state">
+      <strong>Loading UCM</strong>
+      <p>Preparing chain controls.</p>
+    </div>
+  `, 'loading'));
+  bindEvents(true);
+
+  if (!hasAnyChainControlPermission()) {
+    logDiagnostic('warn', 'ui', 'chain panel opened without chain-control permissions', {
+      permissionCount: Array.isArray(state.permissions) ? state.permissions.length : 0,
+      permissions: Array.isArray(state.permissions) ? state.permissions : [],
+    });
+    await renderIntoRoot(buildPanelShell(`
+      <div class="ucm-empty-state">
+        <strong>UCM active</strong>
+        <p>No chain-control permissions are available in this session.</p>
+      </div>
+      ${buildDiagnosticsHTML()}
+    `, 'diagnostics'));
+    bindEvents(true);
+    return document.getElementById(CHAIN_PANEL_ROOT_ID);
+  }
 
   try {
-    const root = await renderDefaultView();
-    if (!root) return null;
+    const nextRoot = await renderDefaultView();
+    if (!nextRoot) return root;
     bindEvents();
-    return root;
+    return nextRoot;
   } catch (error) {
     logDiagnostic('error', 'ui', 'unable to render chain panel', {
       message: error?.message || 'unknown error',
     });
-    return null;
+    await renderIntoRoot(buildPanelShell(`
+      <div class="ucm-empty-state">
+        <strong>UCM panel error</strong>
+        <p>${escapeHtml(error?.message || 'Unable to render chain controls.')}</p>
+      </div>
+      ${buildDiagnosticsHTML()}
+    `, 'diagnostics'));
+    bindEvents(true);
+    return document.getElementById(CHAIN_PANEL_ROOT_ID);
   }
 }
