@@ -511,6 +511,7 @@ async function renderIntoRoot(html) {
   const previousShell = document.getElementById('ucm-chain-panel-shell');
   const wasOpen = previousShell ? !previousShell.hidden : false;
   root.innerHTML = html;
+  delete root.dataset.ucmBound;
 
   const nextShell = document.getElementById('ucm-chain-panel-shell');
   if (nextShell) {
@@ -1071,7 +1072,7 @@ export async function initChainPanel() {
   try {
     const nextRoot = await renderDefaultView();
     if (!nextRoot) return root;
-    bindEvents();
+    bindEvents(true);
     return nextRoot;
   } catch (error) {
     logDiagnostic('error', 'ui', 'unable to render chain panel', {

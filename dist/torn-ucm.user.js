@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn UCM - Ultimate Chain Manager
 // @namespace    https://github.com/kneely/torn-ucm-userscript
-// @version      0.0.2
+// @version      0.0.3
 // @description  Faction chain coordination for Torn - real-time commands, attack blocking, and presence tracking
 // @author       kneely
 // @match        https://www.torn.com/*
@@ -2888,6 +2888,7 @@
 		const previousShell = document.getElementById("ucm-chain-panel-shell");
 		const wasOpen = previousShell ? !previousShell.hidden : false;
 		root.innerHTML = html;
+		delete root.dataset.ucmBound;
 		const nextShell = document.getElementById("ucm-chain-panel-shell");
 		if (nextShell) nextShell.hidden = !wasOpen;
 		return root;
@@ -3325,7 +3326,7 @@
 		try {
 			const nextRoot = await renderDefaultView();
 			if (!nextRoot) return root;
-			bindEvents();
+			bindEvents(true);
 			return nextRoot;
 		} catch (error) {
 			logDiagnostic("error", "ui", "unable to render chain panel", { message: error?.message || "unknown error" });
