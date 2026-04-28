@@ -899,15 +899,16 @@ function bindEvents(force = false) {
   }
 }
 
-export function initChainPanel() {
-  if (!hasAnyChainControlPermission()) return;
+export async function initChainPanel() {
+  if (!hasAnyChainControlPermission()) return null;
 
-  renderDefaultView()
-    .then((root) => {
-      if (!root) return;
-      bindEvents();
-    })
-    .catch((error) => {
-      console.error('[UCM] Unable to render chain panel:', error?.message || error);
-    });
+  try {
+    const root = await renderDefaultView();
+    if (!root) return null;
+    bindEvents();
+    return root;
+  } catch (error) {
+    console.error('[UCM] Unable to render chain panel:', error?.message || error);
+    return null;
+  }
 }

@@ -2818,14 +2818,17 @@
 		});
 		if (getCurrentView() === "detail") applyDetailSection(activeDetailSection);
 	}
-	function initChainPanel() {
-		if (!hasAnyChainControlPermission()) return;
-		renderDefaultView().then((root) => {
-			if (!root) return;
+	async function initChainPanel() {
+		if (!hasAnyChainControlPermission()) return null;
+		try {
+			const root = await renderDefaultView();
+			if (!root) return null;
 			bindEvents();
-		}).catch((error) => {
+			return root;
+		} catch (error) {
 			console.error("[UCM] Unable to render chain panel:", error?.message || error);
-		});
+			return null;
+		}
 	}
 	//#endregion
 	//#region src/dom/mutation-observer.js
@@ -2913,9 +2916,10 @@
 			state.currentChain = chain;
 			state.currentChainId = chain?.id || null;
 			state.commandMode = chain?.commandMode || "free";
-			if (chain?.status === "active") connectSSE(handleEvent);
-			else console.log("[UCM] SSE stream deferred until a chain is active.", { currentChainStatus: chain?.status || null });
-			initChainPanel();
+			initChainPanel().finally(() => {
+				if (chain?.status === "active") connectSSE(handleEvent);
+				else console.log("[UCM] SSE stream deferred until a chain is active.", { currentChainStatus: chain?.status || null });
+			});
 			initMutationObserver();
 			if (isAttackPage()) reapplyIfNeeded(isBlocked());
 			console.log("[UCM] Initialized successfully.");

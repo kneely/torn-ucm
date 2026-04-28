@@ -87,15 +87,16 @@ import { isBlocked } from './state/store.js';
       state.currentChainId = chain?.id || null;
       state.commandMode = chain?.commandMode || 'free';
 
-      if (chain?.status === 'active') {
-        connectSSE(handleEvent);
-      } else {
-        console.log('[UCM] SSE stream deferred until a chain is active.', {
-          currentChainStatus: chain?.status || null,
+      initChainPanel()
+        .finally(() => {
+          if (chain?.status === 'active') {
+            connectSSE(handleEvent);
+          } else {
+            console.log('[UCM] SSE stream deferred until a chain is active.', {
+              currentChainStatus: chain?.status || null,
+            });
+          }
         });
-      }
-
-      initChainPanel();
 
       // 4. Initialize MutationObserver for React re-render handling
       initMutationObserver();
