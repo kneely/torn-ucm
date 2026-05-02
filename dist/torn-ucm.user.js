@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn UCM - Ultimate Chain Manager
 // @namespace    https://github.com/kneely/torn-ucm-userscript
-// @version      0.0.3
+// @version      0.0.4
 // @description  Faction chain coordination for Torn - real-time commands, attack blocking, and presence tracking
 // @author       kneely
 // @match        https://www.torn.com/*
