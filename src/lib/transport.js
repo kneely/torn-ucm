@@ -119,11 +119,13 @@ export async function httpRequest(method, url, opts = {}) {
   const started = performance.now();
   const redactedUrl = redactUrl(url);
   const attempts = [];
+  const preferPda = opts.preferPda !== false;
 
   logDiagnostic('info', 'api', `${normalizedMethod} ${redactedUrl} start`, {
     hasPdaTransport: Boolean(getPdaTransport(normalizedMethod)),
     hasGmTransport: Boolean(getGmRequest()),
     hasFetch: typeof fetch === 'function',
+    preferPda,
   });
 
   const runAttempt = async (name, requestFn) => {
@@ -148,7 +150,7 @@ export async function httpRequest(method, url, opts = {}) {
     }
   };
 
-  if (getPdaTransport(normalizedMethod)) {
+  if (preferPda && getPdaTransport(normalizedMethod)) {
     return runAttempt('pda', () => requestViaPda(normalizedMethod, url, opts));
   }
 

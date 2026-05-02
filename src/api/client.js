@@ -62,7 +62,7 @@ function appendQueryToken(url) {
 /**
  * Make an authenticated request to the UCM backend.
  */
-async function requestOnce(method, path, body = null) {
+async function requestOnce(method, path, body = null, options = {}) {
   let url = `${CONFIG.BACKEND_URL}${path}`;
   const isOnboardRequest = path === '/auth/onboard-member';
   const opts = {
@@ -101,7 +101,10 @@ async function requestOnce(method, path, body = null) {
 
   let response;
   try {
-    response = await httpRequest(method, url, opts);
+    response = await httpRequest(method, url, {
+      ...opts,
+      preferPda: options.preferPda,
+    });
   } catch (err) {
     if (isOnboardRequest) {
       logDiagnostic('error', 'onboarding', 'onboarding request failed', {
@@ -190,14 +193,14 @@ async function refreshSession() {
   return refreshSessionPromise;
 }
 
-async function request(method, path, body = null, hasRetried = false) {
+async function request(method, path, body = null, hasRetried = false, options = {}) {
   try {
-    return await requestOnce(method, path, body);
+    return await requestOnce(method, path, body, options);
   } catch (error) {
     if (!hasRetried && error?.status === 401 && canRefreshSession(path)) {
       logDiagnostic('warn', 'api', 'request unauthorized; refreshing session', { path });
       await refreshSession();
-      return request(method, path, body, true);
+      return request(method, path, body, true, options);
     }
 
     throw error;
@@ -301,7 +304,7 @@ export async function pollEvents(after = 0, timeoutMs = 15000) {
     after: String(Math.max(0, Number(after) || 0)),
     timeoutMs: String(timeoutMs),
   });
-  return request('GET', `/events/poll?${query.toString()}`);
+  return request('GET', `/events/poll?${query.toString()}`, null, false, { preferPda: false });
 }
 
 export async function listMembers(chainId = '') {

@@ -6937,10 +6937,12 @@
 		const started = performance.now();
 		const redactedUrl = redactUrl(url);
 		const attempts = [];
+		const preferPda = opts.preferPda !== false;
 		logDiagnostic("info", "api", `${normalizedMethod} ${redactedUrl} start`, {
 			hasPdaTransport: Boolean(getPdaTransport(normalizedMethod)),
 			hasGmTransport: Boolean(getGmRequest()),
-			hasFetch: typeof fetch === "function"
+			hasFetch: typeof fetch === "function",
+			preferPda
 		});
 		const runAttempt = async (name, requestFn) => {
 			attempts.push(name);
@@ -6963,7 +6965,7 @@
 				throw error;
 			}
 		};
-		if (getPdaTransport(normalizedMethod)) return runAttempt("pda", () => requestViaPda(normalizedMethod, url, opts));
+		if (preferPda && getPdaTransport(normalizedMethod)) return runAttempt("pda", () => requestViaPda(normalizedMethod, url, opts));
 		if (getGmRequest()) return runAttempt("gm", () => requestViaGm(normalizedMethod, url, opts));
 		if (typeof fetch === "function") return runAttempt("fetch", () => requestViaFetch(normalizedMethod, url, opts));
 		logDiagnostic("error", "api", `${normalizedMethod} ${redactedUrl} no transport available`, { attempts });
@@ -7012,7 +7014,7 @@
 	/**
 	* Make an authenticated request to the UCM backend.
 	*/
-	async function requestOnce(method, path, body = null) {
+	async function requestOnce(method, path, body = null, options = {}) {
 		let url = `${CONFIG.BACKEND_URL}${path}`;
 		const isOnboardRequest = path === "/auth/onboard-member";
 		const opts = {
@@ -7038,7 +7040,10 @@
 		});
 		let response;
 		try {
-			response = await httpRequest(method, url, opts);
+			response = await httpRequest(method, url, {
+				...opts,
+				preferPda: options.preferPda
+			});
 		} catch (err) {
 			if (isOnboardRequest) logDiagnostic("error", "onboarding", "onboarding request failed", { message: err?.message || "unknown error" });
 			throw new Error(`Network request failed: ${err?.message || "unknown error"}`);
@@ -7095,14 +7100,14 @@
 		});
 		return refreshSessionPromise;
 	}
-	async function request(method, path, body = null, hasRetried = false) {
+	async function request(method, path, body = null, hasRetried = false, options = {}) {
 		try {
-			return await requestOnce(method, path, body);
+			return await requestOnce(method, path, body, options);
 		} catch (error) {
 			if (!hasRetried && error?.status === 401 && canRefreshSession(path)) {
 				logDiagnostic("warn", "api", "request unauthorized; refreshing session", { path });
 				await refreshSession();
-				return request(method, path, body, true);
+				return request(method, path, body, true, options);
 			}
 			throw error;
 		}
@@ -7163,7 +7168,7 @@
 		return request("GET", `/events/poll?${new URLSearchParams({
 			after: String(Math.max(0, Number(after) || 0)),
 			timeoutMs: String(timeoutMs)
-		}).toString()}`);
+		}).toString()}`, null, false, { preferPda: false });
 	}
 	async function listMembers(chainId = "") {
 		return request("GET", `/members${chainId ? `?chainId=${encodeURIComponent(chainId)}` : ""}`);
@@ -9586,12 +9591,14 @@
 		commandModal.querySelector("input:not([type=\"hidden\"]), select, button")?.focus();
 	}
 	async function openPanel() {
+		const { shell } = getElements();
+		if (shell) shell.hidden = false;
 		try {
 			if (getCurrentView() === "detail" && getCurrentChainId()) await renderDetailView(getCurrentChainId());
 			else if (getCurrentView() === "create") await renderCreateView();
 			else await renderDefaultView();
-			const { shell } = getElements();
-			if (shell) shell.hidden = false;
+			const { shell: nextShell } = getElements();
+			if (nextShell) nextShell.hidden = false;
 			bindEvents(true);
 		} catch (error) {
 			logDiagnostic("error", "ui", "unable to open chain panel", { message: error?.message || "unknown error" });

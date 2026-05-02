@@ -694,6 +694,9 @@ function openCommandModal(action, defaults = {}) {
 }
 
 async function openPanel() {
+  const { shell } = getElements();
+  if (shell) shell.hidden = false;
+
   try {
     if (getCurrentView() === 'detail' && getCurrentChainId()) {
       await renderDetailView(getCurrentChainId());
@@ -702,8 +705,8 @@ async function openPanel() {
     } else {
       await renderDefaultView();
     }
-    const { shell } = getElements();
-    if (shell) shell.hidden = false;
+    const { shell: nextShell } = getElements();
+    if (nextShell) nextShell.hidden = false;
     bindEvents(true);
   } catch (error) {
     logDiagnostic('error', 'ui', 'unable to open chain panel', {
