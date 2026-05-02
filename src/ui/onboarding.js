@@ -5,10 +5,10 @@ import { logDiagnostic, serializeDiagnostics } from '../lib/diagnostics.js';
 import { storageGet, storageSet } from '../lib/storage.js';
 
 const MODAL_ID = 'ucm-onboarding-modal';
-const TARGET_PATH = '/factions.php';
 const EMPTY_SESSION_VALUES = new Set(['', 'undefined', 'null']);
 
 let routeWatcherInstalled = false;
+let onboardingDismissed = false;
 
 export function normalizeSessionToken(value) {
   if (value == null) return null;
@@ -27,10 +27,8 @@ export function hasValidSessionToken(value) {
 
 export function isOnboardingEligibleRoute(locationHref = '') {
   try {
-    const { pathname, searchParams } = new URL(locationHref);
-    return pathname === TARGET_PATH
-      && searchParams.get('step') === 'your'
-      && searchParams.get('type') === '1';
+    const { hostname } = new URL(locationHref);
+    return hostname === 'www.torn.com';
   } catch {
     return false;
   }
@@ -66,6 +64,7 @@ function createModalMarkup() {
           />
 
           <button id="ucm-onboarding-submit" type="submit">Connect</button>
+          <button id="ucm-onboarding-dismiss" class="ucm-secondary-button" type="button">Not now</button>
           <button id="ucm-onboarding-copy-diagnostics" class="ucm-secondary-button" type="button">Copy Diagnostics</button>
           <p id="ucm-onboarding-status" class="ucm-onboarding-status" aria-live="polite"></p>
         </form>
@@ -113,6 +112,12 @@ function setPending(isPending) {
   if (input) {
     input.disabled = isPending;
   }
+}
+
+function dismissOnboardingModal() {
+  onboardingDismissed = true;
+  document.getElementById(MODAL_ID)?.remove();
+  logOnboarding('modal dismissed by user');
 }
 
 function persistSession(data) {
@@ -173,6 +178,7 @@ async function submitOnboarding(apiKey) {
 function bindFormIfNeeded() {
   const form = document.getElementById('ucm-onboarding-form');
   const apiKeyInput = document.getElementById('ucm-api-key');
+  const dismissButton = document.getElementById('ucm-onboarding-dismiss');
   const copyDiagnosticsButton = document.getElementById('ucm-onboarding-copy-diagnostics');
 
   if (!form || !apiKeyInput) {
@@ -192,6 +198,8 @@ function bindFormIfNeeded() {
   form.dataset.ucmBound = '1';
   apiKeyInput.focus();
   logOnboarding('bindFormIfNeeded attached submit listener');
+
+  dismissButton?.addEventListener('click', dismissOnboardingModal);
 
   copyDiagnosticsButton?.addEventListener('click', async () => {
     try {
@@ -259,13 +267,13 @@ function bindFormIfNeeded() {
 }
 
 export function showOnboardingModalForTornPda() {
-  const routeMatch = isOnboardingRoute();
+  const routeEligible = isOnboardingRoute();
   const rawSessionToken = storageGet(CONFIG.STORAGE.SESSION_TOKEN);
   const hasSession = hasValidSessionToken(rawSessionToken);
 
   logOnboarding('eligibility check', {
     href: window.location.href,
-    routeMatch,
+    routeEligible,
     hasSessionToken: hasSession,
     sessionTokenLength: rawSessionToken?.length || 0,
     isTopWindow: window.top === window.self,
@@ -273,7 +281,11 @@ export function showOnboardingModalForTornPda() {
   });
 
   if (hasSession) return false;
-  if (!routeMatch) return false;
+  if (!routeEligible) return false;
+  if (onboardingDismissed) {
+    logOnboarding('modal skipped: dismissed for current page load');
+    return false;
+  }
 
   const modalRoot = mountModal();
   logOnboarding('modal mount result', {

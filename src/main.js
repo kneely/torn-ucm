@@ -65,7 +65,7 @@ import { isBlocked } from './state/store.js';
   injectStyles();
 
   if (!hasValidSessionToken(state.sessionToken)) {
-    logDiagnostic('info', 'startup', 'no valid session found; watching onboarding route', {
+    logDiagnostic('info', 'startup', 'no valid session found; enabling onboarding prompt', {
       href: window.location.href,
       hasSessionToken: false,
       isTopWindow: window.top === window.self,

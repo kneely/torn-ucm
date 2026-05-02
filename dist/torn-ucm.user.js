@@ -609,13 +609,13 @@
 	//#endregion
 	//#region src/ui/onboarding.js
 	var MODAL_ID = "ucm-onboarding-modal";
-	var TARGET_PATH = "/factions.php";
 	var EMPTY_SESSION_VALUES = new Set([
 		"",
 		"undefined",
 		"null"
 	]);
 	var routeWatcherInstalled = false;
+	var onboardingDismissed = false;
 	function normalizeSessionToken(value) {
 		if (value == null) return null;
 		const normalized = String(value).trim();
@@ -627,8 +627,8 @@
 	}
 	function isOnboardingEligibleRoute(locationHref = "") {
 		try {
-			const { pathname, searchParams } = new URL(locationHref);
-			return pathname === TARGET_PATH && searchParams.get("step") === "your" && searchParams.get("type") === "1";
+			const { hostname } = new URL(locationHref);
+			return hostname === "www.torn.com";
 		} catch {
 			return false;
 		}
@@ -660,6 +660,7 @@
           />
 
           <button id="ucm-onboarding-submit" type="submit">Connect</button>
+          <button id="ucm-onboarding-dismiss" class="ucm-secondary-button" type="button">Not now</button>
           <button id="ucm-onboarding-copy-diagnostics" class="ucm-secondary-button" type="button">Copy Diagnostics</button>
           <p id="ucm-onboarding-status" class="ucm-onboarding-status" aria-live="polite"></p>
         </form>
@@ -698,6 +699,11 @@
 			button.textContent = isPending ? "Connecting..." : "Connect";
 		}
 		if (input) input.disabled = isPending;
+	}
+	function dismissOnboardingModal() {
+		onboardingDismissed = true;
+		document.getElementById(MODAL_ID)?.remove();
+		logOnboarding("modal dismissed by user");
 	}
 	function persistSession(data) {
 		saveSession(data.sessionToken, data.member?.id, data.faction?.id, data.permissions || []);
@@ -742,6 +748,7 @@
 	function bindFormIfNeeded() {
 		const form = document.getElementById("ucm-onboarding-form");
 		const apiKeyInput = document.getElementById("ucm-api-key");
+		const dismissButton = document.getElementById("ucm-onboarding-dismiss");
 		const copyDiagnosticsButton = document.getElementById("ucm-onboarding-copy-diagnostics");
 		if (!form || !apiKeyInput) {
 			logOnboarding("bindFormIfNeeded skipped: missing form or API key input", {
@@ -758,6 +765,7 @@
 		form.dataset.ucmBound = "1";
 		apiKeyInput.focus();
 		logOnboarding("bindFormIfNeeded attached submit listener");
+		dismissButton?.addEventListener("click", dismissOnboardingModal);
 		copyDiagnosticsButton?.addEventListener("click", async () => {
 			try {
 				await navigator.clipboard.writeText(serializeDiagnostics());
@@ -808,19 +816,23 @@
 		});
 	}
 	function showOnboardingModalForTornPda() {
-		const routeMatch = isOnboardingRoute();
+		const routeEligible = isOnboardingRoute();
 		const rawSessionToken = storageGet(CONFIG.STORAGE.SESSION_TOKEN);
 		const hasSession = hasValidSessionToken(rawSessionToken);
 		logOnboarding("eligibility check", {
 			href: window.location.href,
-			routeMatch,
+			routeEligible,
 			hasSessionToken: hasSession,
 			sessionTokenLength: rawSessionToken?.length || 0,
 			isTopWindow: window.top === window.self,
 			readyState: document.readyState
 		});
 		if (hasSession) return false;
-		if (!routeMatch) return false;
+		if (!routeEligible) return false;
+		if (onboardingDismissed) {
+			logOnboarding("modal skipped: dismissed for current page load");
+			return false;
+		}
 		const modalRoot = mountModal();
 		logOnboarding("modal mount result", {
 			mounted: Boolean(modalRoot),
@@ -3410,7 +3422,7 @@
 		});
 		injectStyles();
 		if (!hasValidSessionToken(state.sessionToken)) {
-			logDiagnostic("info", "startup", "no valid session found; watching onboarding route", {
+			logDiagnostic("info", "startup", "no valid session found; enabling onboarding prompt", {
 				href: window.location.href,
 				hasSessionToken: false,
 				isTopWindow: window.top === window.self
