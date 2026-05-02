@@ -117,7 +117,7 @@ export function setLastTransport(transport) {
 
 export function setSseStatus(status, details = undefined) {
   sseStatus = status || 'unknown';
-  logDiagnostic(status === 'error' ? 'error' : 'info', 'sse', `SSE ${sseStatus}`, details);
+  logDiagnostic(status === 'error' ? 'error' : 'info', 'events', `Events ${sseStatus}`, details);
 }
 
 export function getDiagnosticsEntries() {
@@ -177,7 +177,7 @@ export function serializeDiagnostics() {
     `Backend: ${redactUrl(platform.backendUrl)}`,
     `Script version: ${platform.scriptVersion}`,
     `Transport: ${platform.lastTransport}`,
-    `SSE: ${platform.sseStatus}`,
+    `Events: ${platform.sseStatus}`,
     `Session: ${platform.hasSessionToken ? `present (${platform.sessionTokenLength})` : 'missing'}`,
     `Member: ${platform.memberId || '-'}`,
     `Faction: ${platform.factionId || '-'}`,

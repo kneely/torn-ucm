@@ -5,8 +5,8 @@ import { logDiagnostic } from '../lib/diagnostics.js';
 import { showNotification } from '../ui/notifications.js';
 
 /**
- * Handle a single event from the SSE stream.
- * Called with (type, payload, eventId) from the SSE client.
+ * Handle a single event from the backend event transport.
+ * Called with (type, payload, eventId) from the polling client.
  */
 export function handleEvent(type, payload, eventId) {
   // Update cursor if we received a newer event ID

@@ -6779,7 +6779,7 @@
 	}
 	function setSseStatus(status, details = void 0) {
 		sseStatus = status || "unknown";
-		logDiagnostic(status === "error" ? "error" : "info", "sse", `SSE ${sseStatus}`, details);
+		logDiagnostic(status === "error" ? "error" : "info", "events", `Events ${sseStatus}`, details);
 	}
 	function getDiagnosticsEntries() {
 		return [...entries];
@@ -6826,7 +6826,7 @@
 			`Backend: ${redactUrl(platform.backendUrl)}`,
 			`Script version: ${platform.scriptVersion}`,
 			`Transport: ${platform.lastTransport}`,
-			`SSE: ${platform.sseStatus}`,
+			`Events: ${platform.sseStatus}`,
 			`Session: ${platform.hasSessionToken ? `present (${platform.sessionTokenLength})` : "missing"}`,
 			`Member: ${platform.memberId || "-"}`,
 			`Faction: ${platform.factionId || "-"}`,
@@ -6968,9 +6968,6 @@
 		if (typeof fetch === "function") return runAttempt("fetch", () => requestViaFetch(normalizedMethod, url, opts));
 		logDiagnostic("error", "api", `${normalizedMethod} ${redactedUrl} no transport available`, { attempts });
 		throw new Error("No compatible network transport is available.");
-	}
-	function getStreamingUserscriptRequest() {
-		return getGmRequest();
 	}
 	//#endregion
 	//#region src/api/client.js
@@ -7161,6 +7158,12 @@
 	}
 	async function addWatchlistEntry(chainId, payload) {
 		return request("POST", `/chains/${chainId}/watchlist`, payload);
+	}
+	async function pollEvents(after = 0, timeoutMs = 15e3) {
+		return request("GET", `/events/poll?${new URLSearchParams({
+			after: String(Math.max(0, Number(after) || 0)),
+			timeoutMs: String(timeoutMs)
+		}).toString()}`);
 	}
 	async function listMembers(chainId = "") {
 		return request("GET", `/members${chainId ? `?chainId=${encodeURIComponent(chainId)}` : ""}`);
@@ -8404,19 +8407,8 @@
 		document.head.appendChild(style);
 	}
 	//#endregion
-	//#region src/api/sse-client.js
-	/**
-	* SSE client implemented on top of GM_xmlhttpRequest.
-	*
-	* The native EventSource API is subject to the page's Content Security Policy,
-	* and Torn's CSP does not whitelist our backend in `connect-src`. Routing the
-	* stream through the userscript manager (which respects `@connect` metadata)
-	* is the only way to keep a long-lived connection open on torn.com.
-	*
-	* We read the text response incrementally via `onprogress` and parse the SSE
-	* wire format manually: blocks separated by a blank line, each with `event:`,
-	* `data:`, and (optionally) `id:` fields.
-	*/
+	//#region src/api/event-poll-client.js
+	var POLL_TIMEOUT_MS = 15e3;
 	var MAX_RECONNECT_DELAY = 3e4;
 	var SUPPORTED_EVENT_TYPES = new Set([
 		"command.hold_all",
@@ -8427,142 +8419,108 @@
 		"defense.alert",
 		"presence.updated"
 	]);
-	var currentRequest = null;
+	var disposed = true;
+	var isPolling = false;
 	var reconnectAttempts = 0;
-	var disposed = false;
+	var reconnectTimer = null;
 	var onEventCallback = null;
 	var lastEventId = 0;
-	function scheduleReconnect() {
-		if (disposed) return;
-		const base = Math.min(1e3 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
-		const jitter = Math.floor(Math.random() * 500);
-		reconnectAttempts += 1;
-		setSseStatus("reconnecting", {
-			reconnectAttempts,
-			delayMs: base + jitter,
-			lastEventId
-		});
-		setTimeout(() => {
-			if (!disposed) openStream();
-		}, base + jitter);
+	function updateLastEventId(eventId) {
+		const parsedId = Number(eventId) || 0;
+		if (parsedId > lastEventId) lastEventId = parsedId;
+		if (parsedId > state.eventCursor) state.eventCursor = parsedId;
 	}
-	function dispatchBlock(block) {
-		let eventType = "message";
-		const dataLines = [];
-		let id = "0";
-		for (const rawLine of block.split("\n")) {
-			const line = rawLine.replace(/\r$/, "");
-			if (!line) continue;
-			if (line.startsWith(":")) continue;
-			const colon = line.indexOf(":");
-			const field = colon === -1 ? line : line.slice(0, colon);
-			let value = colon === -1 ? "" : line.slice(colon + 1);
-			if (value.startsWith(" ")) value = value.slice(1);
-			if (field === "event") eventType = value;
-			else if (field === "data") dataLines.push(value);
-			else if (field === "id") id = value;
-		}
-		if (dataLines.length === 0) return;
-		if (!SUPPORTED_EVENT_TYPES.has(eventType)) return;
-		const payload = dataLines.join("\n");
+	function dispatchEvent(evt) {
+		if (!evt || !SUPPORTED_EVENT_TYPES.has(evt.eventType)) return;
 		try {
-			const parsed = JSON.parse(payload);
-			const parsedId = parseInt(id, 10) || 0;
-			if (parsedId > lastEventId) lastEventId = parsedId;
-			onEventCallback(eventType, parsed, parsedId);
-			logDiagnostic("ok", "sse", `event ${eventType}`, {
-				eventId: parsedId,
+			const parsed = JSON.parse(evt.payloadJson || "{}");
+			updateLastEventId(evt.id);
+			onEventCallback(evt.eventType, parsed, Number(evt.id) || 0);
+			logDiagnostic("ok", "events", `poll event ${evt.eventType}`, {
+				eventId: Number(evt.id) || 0,
 				lastEventId
 			});
-		} catch (err) {
-			logDiagnostic("warn", "sse", "failed to parse SSE event", { message: err?.message || "unknown error" });
-		}
-	}
-	function openStream() {
-		const gmRequest = getStreamingUserscriptRequest();
-		if (!gmRequest) {
-			setSseStatus("error", {
-				message: "Streaming userscript transport unavailable. TornPDA may not expose GM_xmlhttpRequest for SSE.",
-				hasPdaHttpGet: typeof PDA_httpGet === "function"
+		} catch (error) {
+			logDiagnostic("warn", "events", "failed to parse poll event", {
+				eventType: evt.eventType,
+				eventId: evt.id,
+				message: error?.message || "unknown error"
 			});
-			return;
 		}
-		const url = `${CONFIG.BACKEND_URL}/events/stream?token=${encodeURIComponent(state.sessionToken)}`;
-		let buffer = "";
-		let lastTextLength = 0;
-		let announcedOpen = false;
-		const markOpen = () => {
-			if (announcedOpen) return;
-			announcedOpen = true;
-			reconnectAttempts = 0;
-			setSseStatus("connected", { lastEventId });
-		};
-		const ingest = (response) => {
-			const text = response?.responseText || "";
-			if (text.length <= lastTextLength) return;
-			const chunk = text.slice(lastTextLength);
-			lastTextLength = text.length;
-			buffer += chunk;
-			const separator = /\r?\n\r?\n/;
-			let match;
-			while ((match = separator.exec(buffer)) !== null) {
-				const block = buffer.slice(0, match.index);
-				buffer = buffer.slice(match.index + match[0].length);
-				if (block.length > 0) dispatchBlock(block);
-			}
-		};
-		currentRequest = gmRequest({
-			method: "GET",
-			url,
-			headers: {
-				Accept: "text/event-stream",
-				"Cache-Control": "no-cache",
-				...lastEventId > 0 ? { "Last-Event-ID": String(lastEventId) } : {}
-			},
-			responseType: "text",
-			onloadstart: markOpen,
-			onprogress: (response) => {
-				markOpen();
-				ingest(response);
-			},
-			onload: (response) => {
-				ingest(response);
-				if (disposed) return;
-				logDiagnostic("warn", "sse", "SSE stream ended", { lastEventId });
-				scheduleReconnect();
-			},
-			onerror: () => {
-				if (disposed) return;
-				logDiagnostic("warn", "sse", "SSE connection error", { lastEventId });
-				scheduleReconnect();
-			},
-			ontimeout: () => {
-				if (disposed) return;
-				logDiagnostic("warn", "sse", "SSE timed out", { lastEventId });
-				scheduleReconnect();
-			}
-		});
 	}
-	function connectSSE(onEvent) {
-		if (currentRequest && onEventCallback === onEvent && !disposed) return;
+	function scheduleReconnect() {
+		if (disposed) return;
+		const delayMs = Math.min(1e3 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY) + Math.floor(Math.random() * 500);
+		reconnectAttempts += 1;
+		setSseStatus("reconnecting", {
+			transport: "poll",
+			reconnectAttempts,
+			delayMs,
+			lastEventId
+		});
+		reconnectTimer = setTimeout(() => {
+			reconnectTimer = null;
+			pollLoop();
+		}, delayMs);
+	}
+	async function pollLoop() {
+		if (disposed || isPolling) return;
+		isPolling = true;
+		setSseStatus("polling", {
+			transport: "poll",
+			lastEventId
+		});
+		try {
+			while (!disposed) {
+				const result = await pollEvents(lastEventId, POLL_TIMEOUT_MS);
+				if (disposed) break;
+				reconnectAttempts = 0;
+				setSseStatus("connected", {
+					transport: "poll",
+					lastEventId
+				});
+				for (const evt of result?.events || []) dispatchEvent(evt);
+				if (typeof result?.lastEventId === "number") updateLastEventId(result.lastEventId);
+			}
+		} catch (error) {
+			if (!disposed) {
+				logDiagnostic("warn", "events", "event poll failed", {
+					message: error?.message || "unknown error",
+					lastEventId
+				});
+				scheduleReconnect();
+			}
+		} finally {
+			isPolling = false;
+		}
+	}
+	function connectEventPolling(onEvent) {
+		if (!disposed && onEventCallback === onEvent) return;
 		onEventCallback = onEvent;
 		disposed = false;
 		reconnectAttempts = 0;
-		setSseStatus("connecting", { lastEventId });
-		if (currentRequest && typeof currentRequest.abort === "function") try {
-			currentRequest.abort();
-		} catch {}
-		currentRequest = null;
-		openStream();
+		lastEventId = Math.max(lastEventId, Number(state.eventCursor) || 0);
+		setSseStatus("connecting", {
+			transport: "poll",
+			lastEventId
+		});
+		if (reconnectTimer) {
+			clearTimeout(reconnectTimer);
+			reconnectTimer = null;
+		}
+		pollLoop();
 	}
-	function disconnectSSE() {
+	function disconnectEventPolling() {
 		disposed = true;
 		reconnectAttempts = 0;
-		setSseStatus("disconnected", { lastEventId });
-		if (currentRequest && typeof currentRequest.abort === "function") try {
-			currentRequest.abort();
-		} catch {}
-		currentRequest = null;
+		setSseStatus("disconnected", {
+			transport: "poll",
+			lastEventId
+		});
+		if (reconnectTimer) {
+			clearTimeout(reconnectTimer);
+			reconnectTimer = null;
+		}
 	}
 	//#endregion
 	//#region src/dom/selectors.js
@@ -8802,8 +8760,8 @@
 	//#endregion
 	//#region src/events/handler.js
 	/**
-	* Handle a single event from the SSE stream.
-	* Called with (type, payload, eventId) from the SSE client.
+	* Handle a single event from the backend event transport.
+	* Called with (type, payload, eventId) from the polling client.
 	*/
 	function handleEvent(type, payload, eventId) {
 		if (eventId && eventId > state.eventCursor) state.eventCursor = eventId;
@@ -9220,7 +9178,7 @@
 			["Backend", platform.backendUrl],
 			["Script", platform.scriptVersion],
 			["Transport", platform.lastTransport],
-			["SSE", platform.sseStatus],
+			["Events", platform.sseStatus],
 			["Session", platform.hasSessionToken ? `present (${platform.sessionTokenLength})` : "missing"],
 			["Member", platform.memberId],
 			["Faction", platform.factionId],
@@ -9759,7 +9717,7 @@
 			}
 			if (action === "start") {
 				await startChain(chainId);
-				connectSSE(handleEvent);
+				connectEventPolling(handleEvent);
 				activeDetailSection = DEFAULT_DETAIL_SECTION;
 				closeCommandModal();
 				await refreshAfterAction("Chain started.", "detail", chainId);
@@ -9771,7 +9729,7 @@
 					outcome,
 					reason: String(data.get("reason") || "").trim() || null
 				});
-				disconnectSSE();
+				disconnectEventPolling();
 				closeCommandModal();
 				await refreshAfterAction(`Chain ${outcome}.`, "list");
 				return;
@@ -9967,7 +9925,7 @@
 	* Initialization sequence:
 	* 1. Load session from localStorage
 	* 2. Inject styles
-	* 3. Connect SSE for real-time events
+	* 3. Connect event polling for real-time events
 	* 4. Initialize MutationObserver
 	*/
 	(function ucmInit() {
@@ -10023,8 +9981,8 @@
 			state.currentChainId = chain?.id || null;
 			state.commandMode = chain?.commandMode || "free";
 			initChainPanel().finally(() => {
-				if (chain?.status === "active") connectSSE(handleEvent);
-				else logDiagnostic("info", "sse", "SSE stream deferred until a chain is active", { currentChainStatus: chain?.status || null });
+				if (chain?.status === "active") connectEventPolling(handleEvent);
+				else logDiagnostic("info", "events", "event polling deferred until a chain is active", { currentChainStatus: chain?.status || null });
 			});
 			initMutationObserver();
 			if (isAttackPage()) reapplyIfNeeded(isBlocked());

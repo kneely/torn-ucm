@@ -11,7 +11,7 @@ import { initChainPanel } from './ui/chain-panel.js';
 import { initMutationObserver } from './dom/mutation-observer.js';
 import { installAttackClickGuard, reapplyIfNeeded } from './dom/attack-button.js';
 import { isAttackPage } from './dom/selectors.js';
-import { connectSSE } from './api/sse-client.js';
+import { connectEventPolling } from './api/event-poll-client.js';
 import { handleEvent } from './events/handler.js';
 import { getCurrentChain } from './api/client.js';
 import { isBlocked } from './state/store.js';
@@ -22,7 +22,7 @@ import { isBlocked } from './state/store.js';
  * Initialization sequence:
  * 1. Load session from localStorage
  * 2. Inject styles
- * 3. Connect SSE for real-time events
+ * 3. Connect event polling for real-time events
  * 4. Initialize MutationObserver
  */
 (function ucmInit() {
@@ -98,9 +98,9 @@ import { isBlocked } from './state/store.js';
       initChainPanel()
         .finally(() => {
           if (chain?.status === 'active') {
-            connectSSE(handleEvent);
+            connectEventPolling(handleEvent);
           } else {
-            logDiagnostic('info', 'sse', 'SSE stream deferred until a chain is active', {
+            logDiagnostic('info', 'events', 'event polling deferred until a chain is active', {
               currentChainStatus: chain?.status || null,
             });
           }

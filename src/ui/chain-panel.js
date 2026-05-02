@@ -11,7 +11,7 @@ import {
   rsvp,
   startChain,
 } from '../api/client.js';
-import { connectSSE, disconnectSSE } from '../api/sse-client.js';
+import { connectEventPolling, disconnectEventPolling } from '../api/event-poll-client.js';
 import { handleEvent } from '../events/handler.js';
 import { state } from '../state/store.js';
 import {
@@ -203,7 +203,7 @@ function buildDiagnosticsHTML() {
     ['Backend', platform.backendUrl],
     ['Script', platform.scriptVersion],
     ['Transport', platform.lastTransport],
-    ['SSE', platform.sseStatus],
+    ['Events', platform.sseStatus],
     ['Session', platform.hasSessionToken ? `present (${platform.sessionTokenLength})` : 'missing'],
     ['Member', platform.memberId],
     ['Faction', platform.factionId],
@@ -860,7 +860,7 @@ async function submitCommandModal(event) {
 
     if (action === 'start') {
       await startChain(chainId);
-      connectSSE(handleEvent);
+      connectEventPolling(handleEvent);
       activeDetailSection = DEFAULT_DETAIL_SECTION;
       closeCommandModal();
       await refreshAfterAction('Chain started.', 'detail', chainId);
@@ -873,7 +873,7 @@ async function submitCommandModal(event) {
         outcome,
         reason: String(data.get('reason') || '').trim() || null,
       });
-      disconnectSSE();
+      disconnectEventPolling();
       closeCommandModal();
       await refreshAfterAction(`Chain ${outcome}.`, 'list');
       return;

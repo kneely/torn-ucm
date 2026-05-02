@@ -296,6 +296,14 @@ export async function defenseAlert(chainId, payload) {
   return request('POST', `/chains/${chainId}/alerts/defense`, payload);
 }
 
+export async function pollEvents(after = 0, timeoutMs = 15000) {
+  const query = new URLSearchParams({
+    after: String(Math.max(0, Number(after) || 0)),
+    timeoutMs: String(timeoutMs),
+  });
+  return request('GET', `/events/poll?${query.toString()}`);
+}
+
 export async function listMembers(chainId = '') {
   const query = chainId ? `?chainId=${encodeURIComponent(chainId)}` : '';
   return request('GET', `/members${query}`);
