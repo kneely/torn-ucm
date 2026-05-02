@@ -120,13 +120,16 @@ export async function httpRequest(method, url, opts = {}) {
   const redactedUrl = redactUrl(url);
   const attempts = [];
   const preferPda = opts.preferPda !== false;
+  const silent = opts.silent === true;
 
-  logDiagnostic('info', 'api', `${normalizedMethod} ${redactedUrl} start`, {
-    hasPdaTransport: Boolean(getPdaTransport(normalizedMethod)),
-    hasGmTransport: Boolean(getGmRequest()),
-    hasFetch: typeof fetch === 'function',
-    preferPda,
-  });
+  if (!silent) {
+    logDiagnostic('info', 'api', `${normalizedMethod} ${redactedUrl} start`, {
+      hasPdaTransport: Boolean(getPdaTransport(normalizedMethod)),
+      hasGmTransport: Boolean(getGmRequest()),
+      hasFetch: typeof fetch === 'function',
+      preferPda,
+    });
+  }
 
   const runAttempt = async (name, requestFn) => {
     attempts.push(name);
@@ -134,18 +137,22 @@ export async function httpRequest(method, url, opts = {}) {
       const response = await requestFn();
       setLastTransport(response.transport);
       const ms = Math.round(performance.now() - started);
-      logDiagnostic(response.ok ? 'ok' : 'warn', 'api', `${normalizedMethod} ${redactedUrl} -> ${response.status || 'ERR'}`, {
-        transport: response.transport,
-        ms,
-      });
+      if (!silent) {
+        logDiagnostic(response.ok ? 'ok' : 'warn', 'api', `${normalizedMethod} ${redactedUrl} -> ${response.status || 'ERR'}`, {
+          transport: response.transport,
+          ms,
+        });
+      }
       return response;
     } catch (error) {
       const ms = Math.round(performance.now() - started);
-      logDiagnostic('warn', 'api', `${normalizedMethod} ${redactedUrl} ${name} failed`, {
-        transport: name,
-        ms,
-        message: error?.message || 'unknown error',
-      });
+      if (!silent) {
+        logDiagnostic('warn', 'api', `${normalizedMethod} ${redactedUrl} ${name} failed`, {
+          transport: name,
+          ms,
+          message: error?.message || 'unknown error',
+        });
+      }
       throw error;
     }
   };

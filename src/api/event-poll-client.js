@@ -35,17 +35,16 @@ function updateLastEventId(eventId) {
 function dispatchEvent(evt) {
   if (!evt || !SUPPORTED_EVENT_TYPES.has(evt.eventType)) return;
 
+  const eventId = Number(evt.id) || 0;
+  if (eventId > 0 && eventId <= lastEventId) return;
+
   const shell = document.querySelector(PANEL_SHELL_SELECTOR);
   const shellWasHidden = Boolean(shell?.hidden);
 
   try {
     const parsed = JSON.parse(evt.payloadJson || '{}');
-    updateLastEventId(evt.id);
-    onEventCallback(evt.eventType, parsed, Number(evt.id) || 0);
-    logDiagnostic('ok', 'events', `poll event ${evt.eventType}`, {
-      eventId: Number(evt.id) || 0,
-      lastEventId,
-    });
+    updateLastEventId(eventId);
+    onEventCallback(evt.eventType, parsed, eventId);
   } catch (error) {
     logDiagnostic('warn', 'events', 'failed to parse poll event', {
       eventType: evt.eventType,

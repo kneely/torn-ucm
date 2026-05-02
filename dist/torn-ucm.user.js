@@ -6938,7 +6938,8 @@
 		const redactedUrl = redactUrl(url);
 		const attempts = [];
 		const preferPda = opts.preferPda !== false;
-		logDiagnostic("info", "api", `${normalizedMethod} ${redactedUrl} start`, {
+		const silent = opts.silent === true;
+		if (!silent) logDiagnostic("info", "api", `${normalizedMethod} ${redactedUrl} start`, {
 			hasPdaTransport: Boolean(getPdaTransport(normalizedMethod)),
 			hasGmTransport: Boolean(getGmRequest()),
 			hasFetch: typeof fetch === "function",
@@ -6950,14 +6951,14 @@
 				const response = await requestFn();
 				setLastTransport(response.transport);
 				const ms = Math.round(performance.now() - started);
-				logDiagnostic(response.ok ? "ok" : "warn", "api", `${normalizedMethod} ${redactedUrl} -> ${response.status || "ERR"}`, {
+				if (!silent) logDiagnostic(response.ok ? "ok" : "warn", "api", `${normalizedMethod} ${redactedUrl} -> ${response.status || "ERR"}`, {
 					transport: response.transport,
 					ms
 				});
 				return response;
 			} catch (error) {
 				const ms = Math.round(performance.now() - started);
-				logDiagnostic("warn", "api", `${normalizedMethod} ${redactedUrl} ${name} failed`, {
+				if (!silent) logDiagnostic("warn", "api", `${normalizedMethod} ${redactedUrl} ${name} failed`, {
 					transport: name,
 					ms,
 					message: error?.message || "unknown error"
@@ -7042,7 +7043,8 @@
 		try {
 			response = await httpRequest(method, url, {
 				...opts,
-				preferPda: options.preferPda
+				preferPda: options.preferPda,
+				silent: options.silent
 			});
 		} catch (err) {
 			if (isOnboardRequest) logDiagnostic("error", "onboarding", "onboarding request failed", { message: err?.message || "unknown error" });
@@ -7168,7 +7170,10 @@
 		return request("GET", `/events/poll?${new URLSearchParams({
 			after: String(Math.max(0, Number(after) || 0)),
 			timeoutMs: String(timeoutMs)
-		}).toString()}`, null, false, { preferPda: false });
+		}).toString()}`, null, false, {
+			preferPda: false,
+			silent: true
+		});
 	}
 	async function listMembers(chainId = "") {
 		return request("GET", `/members${chainId ? `?chainId=${encodeURIComponent(chainId)}` : ""}`);
@@ -8438,16 +8443,14 @@
 	}
 	function dispatchEvent(evt) {
 		if (!evt || !SUPPORTED_EVENT_TYPES.has(evt.eventType)) return;
+		const eventId = Number(evt.id) || 0;
+		if (eventId > 0 && eventId <= lastEventId) return;
 		const shell = document.querySelector(PANEL_SHELL_SELECTOR);
 		const shellWasHidden = Boolean(shell?.hidden);
 		try {
 			const parsed = JSON.parse(evt.payloadJson || "{}");
-			updateLastEventId(evt.id);
-			onEventCallback(evt.eventType, parsed, Number(evt.id) || 0);
-			logDiagnostic("ok", "events", `poll event ${evt.eventType}`, {
-				eventId: Number(evt.id) || 0,
-				lastEventId
-			});
+			updateLastEventId(eventId);
+			onEventCallback(evt.eventType, parsed, eventId);
 		} catch (error) {
 			logDiagnostic("warn", "events", "failed to parse poll event", {
 				eventType: evt.eventType,

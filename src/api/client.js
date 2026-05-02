@@ -104,6 +104,7 @@ async function requestOnce(method, path, body = null, options = {}) {
     response = await httpRequest(method, url, {
       ...opts,
       preferPda: options.preferPda,
+      silent: options.silent,
     });
   } catch (err) {
     if (isOnboardRequest) {
@@ -304,7 +305,10 @@ export async function pollEvents(after = 0, timeoutMs = 15000) {
     after: String(Math.max(0, Number(after) || 0)),
     timeoutMs: String(timeoutMs),
   });
-  return request('GET', `/events/poll?${query.toString()}`, null, false, { preferPda: false });
+  return request('GET', `/events/poll?${query.toString()}`, null, false, {
+    preferPda: false,
+    silent: true,
+  });
 }
 
 export async function listMembers(chainId = '') {
