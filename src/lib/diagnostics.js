@@ -1,6 +1,6 @@
 import { CONFIG } from '../config.js';
 import { state } from '../state/store.js';
-import { addUcmBreadcrumb, captureUcmException } from './sentry.js';
+import { captureDiagnostic, captureUcmException } from './posthog.js';
 
 const MAX_ENTRIES = 150;
 const SENSITIVE_QUERY_KEYS = new Set([
@@ -99,7 +99,7 @@ export function logDiagnostic(level, area, message, details = undefined) {
   const consoleMethod = getConsoleMethod(normalizedLevel);
   console[consoleMethod](`[UCM][${entry.area}] ${entry.message}${formatConsoleDetails(entry.details)}`);
 
-  addUcmBreadcrumb(entry);
+  captureDiagnostic(entry);
   if (normalizedLevel === 'error') {
     captureUcmException(new Error(`[${entry.area}] ${entry.message}`), {
       tags: { area: entry.area },

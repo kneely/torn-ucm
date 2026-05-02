@@ -1,10 +1,10 @@
-import './lib/sentry.js';
+import './lib/posthog.js';
 import 'virtual:uno.css';
 import { CONFIG } from './config.js';
 import { state } from './state/store.js';
 import { storageGet } from './lib/storage.js';
 import { logDiagnostic } from './lib/diagnostics.js';
-import { updateSentryUserContext } from './lib/sentry.js';
+import { updatePostHogUserContext } from './lib/posthog.js';
 import { normalizeSessionToken, hasValidSessionToken, initOnboardingRouteWatcherForTornPda } from './ui/onboarding.js';
 import { injectStyles } from './ui/styles.js';
 import { initChainPanel } from './ui/chain-panel.js';
@@ -62,7 +62,7 @@ import { isBlocked } from './state/store.js';
     factionId: state.factionId || null,
     permissionCount: state.permissions.length,
   });
-  updateSentryUserContext({
+  updatePostHogUserContext({
     memberId: state.memberId,
     factionId: state.factionId,
     permissionCount: state.permissions.length,
