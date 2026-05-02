@@ -645,6 +645,7 @@
       <div class="ucm-onboarding-card" role="dialog" aria-modal="true" aria-labelledby="ucm-onboarding-title">
         <h2 id="ucm-onboarding-title">Ultimate Chain Manager</h2>
         <p class="ucm-onboarding-subtitle">Connect your Torn account to enable chain controls in TornPDA.</p>
+        <p>Please use the following link to generate a Torn API key with the required permissions: <a href="https://www.torn.com/preferences.php#tab=api?step=addNewKey&user=faction,personalstats,profile,bars,cooldowns,inventory,refills,revives,revivesfull,travel,attacks&title=Ultimate Chain Manager" target="_blank" rel="noopener">link</a></p>
 
         <form id="ucm-onboarding-form" class="ucm-onboarding-form u-flex u-flex-col u-gap-ucm-2">
           <label for="ucm-api-key">Torn API Key</label>
