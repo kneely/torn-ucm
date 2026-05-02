@@ -745,6 +745,19 @@ async function refreshAfterAction(message = '', view = 'detail', chainId = '') {
   if (message) showNotification(message);
 }
 
+function finishCommandWithoutRefresh(message, commandMode = '') {
+  activeDetailSection = 'advanced';
+  if (commandMode) {
+    state.commandMode = commandMode;
+    if (state.currentChain) {
+      state.currentChain.commandMode = commandMode;
+    }
+  }
+  closeCommandModal();
+  setChainPanelStatus(message, 'success');
+  showNotification(message);
+}
+
 async function submitCreate(event) {
   event.preventDefault();
   const data = new FormData(event.currentTarget);
@@ -807,9 +820,7 @@ async function submitCommandModal(event) {
         reason: String(data.get('reason') || '').trim(),
         blockAttackButton: data.get('blockAttackButton') === 'on',
       });
-      activeDetailSection = 'advanced';
-      closeCommandModal();
-      await refreshAfterAction('Hold all applied.', 'detail', chainId);
+      finishCommandWithoutRefresh('Hold all applied.', 'hold_all');
       return;
     }
 
@@ -817,9 +828,7 @@ async function submitCommandModal(event) {
       await releaseAll(chainId, {
         reason: String(data.get('reason') || '').trim(),
       });
-      activeDetailSection = 'advanced';
-      closeCommandModal();
-      await refreshAfterAction('Released hold.', 'detail', chainId);
+      finishCommandWithoutRefresh('Released hold.', 'free');
       return;
     }
 
