@@ -6,8 +6,12 @@ import cssInjectedByJsPlugin from 'vite-plugin-css-injected-by-js';
 
 // Read userscript header from separate file
 const userscriptHeader = readFileSync(resolve(__dirname, 'src/userscript-header.js'), 'utf-8');
+const packageJson = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf-8'));
 
 export default defineConfig({
+  define: {
+    __UCM_VERSION__: JSON.stringify(packageJson.version),
+  },
   plugins: [
     UnoCSS(),
     cssInjectedByJsPlugin({ topExecutionPriority: false }),

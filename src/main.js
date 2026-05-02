@@ -1,8 +1,10 @@
+import './lib/sentry.js';
 import 'virtual:uno.css';
 import { CONFIG } from './config.js';
 import { state } from './state/store.js';
 import { storageGet } from './lib/storage.js';
 import { logDiagnostic } from './lib/diagnostics.js';
+import { updateSentryUserContext } from './lib/sentry.js';
 import { normalizeSessionToken, hasValidSessionToken, initOnboardingRouteWatcherForTornPda } from './ui/onboarding.js';
 import { injectStyles } from './ui/styles.js';
 import { initChainPanel } from './ui/chain-panel.js';
@@ -58,6 +60,11 @@ import { isBlocked } from './state/store.js';
     sessionTokenLength: state.sessionToken?.length || 0,
     memberId: state.memberId || null,
     factionId: state.factionId || null,
+    permissionCount: state.permissions.length,
+  });
+  updateSentryUserContext({
+    memberId: state.memberId,
+    factionId: state.factionId,
     permissionCount: state.permissions.length,
   });
 
