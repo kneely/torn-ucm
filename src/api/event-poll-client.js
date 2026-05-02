@@ -13,6 +13,7 @@ const SUPPORTED_EVENT_TYPES = new Set([
   'defense.alert',
   'presence.updated',
 ]);
+const PANEL_SHELL_SELECTOR = '#ucm-chain-panel-root .ucm-panel-shell';
 
 let disposed = true;
 let isPolling = false;
@@ -34,6 +35,9 @@ function updateLastEventId(eventId) {
 function dispatchEvent(evt) {
   if (!evt || !SUPPORTED_EVENT_TYPES.has(evt.eventType)) return;
 
+  const shell = document.querySelector(PANEL_SHELL_SELECTOR);
+  const shellWasHidden = Boolean(shell?.hidden);
+
   try {
     const parsed = JSON.parse(evt.payloadJson || '{}');
     updateLastEventId(evt.id);
@@ -48,6 +52,10 @@ function dispatchEvent(evt) {
       eventId: evt.id,
       message: error?.message || 'unknown error',
     });
+  } finally {
+    if (shellWasHidden && shell) {
+      shell.hidden = true;
+    }
   }
 }
 
@@ -72,7 +80,6 @@ function scheduleReconnect() {
 async function pollLoop() {
   if (disposed || isPolling) return;
   isPolling = true;
-  setSseStatus('polling', { transport: 'poll', lastEventId });
 
   try {
     while (!disposed) {
@@ -80,10 +87,6 @@ async function pollLoop() {
       if (disposed) break;
 
       reconnectAttempts = 0;
-      setSseStatus('connected', {
-        transport: 'poll',
-        lastEventId,
-      });
 
       for (const evt of result?.events || []) {
         dispatchEvent(evt);

@@ -8424,6 +8424,7 @@
 		"defense.alert",
 		"presence.updated"
 	]);
+	var PANEL_SHELL_SELECTOR = "#ucm-chain-panel-root .ucm-panel-shell";
 	var disposed = true;
 	var isPolling = false;
 	var reconnectAttempts = 0;
@@ -8437,6 +8438,8 @@
 	}
 	function dispatchEvent(evt) {
 		if (!evt || !SUPPORTED_EVENT_TYPES.has(evt.eventType)) return;
+		const shell = document.querySelector(PANEL_SHELL_SELECTOR);
+		const shellWasHidden = Boolean(shell?.hidden);
 		try {
 			const parsed = JSON.parse(evt.payloadJson || "{}");
 			updateLastEventId(evt.id);
@@ -8451,6 +8454,8 @@
 				eventId: evt.id,
 				message: error?.message || "unknown error"
 			});
+		} finally {
+			if (shellWasHidden && shell) shell.hidden = true;
 		}
 	}
 	function scheduleReconnect() {
@@ -8471,19 +8476,11 @@
 	async function pollLoop() {
 		if (disposed || isPolling) return;
 		isPolling = true;
-		setSseStatus("polling", {
-			transport: "poll",
-			lastEventId
-		});
 		try {
 			while (!disposed) {
 				const result = await pollEvents(lastEventId, POLL_TIMEOUT_MS);
 				if (disposed) break;
 				reconnectAttempts = 0;
-				setSseStatus("connected", {
-					transport: "poll",
-					lastEventId
-				});
 				for (const evt of result?.events || []) dispatchEvent(evt);
 				if (typeof result?.lastEventId === "number") updateLastEventId(result.lastEventId);
 			}
