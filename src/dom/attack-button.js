@@ -1,4 +1,4 @@
-import { findAttackButton, isAttackPage } from './selectors.js';
+import { findAttackButton, isAttackButton, isAttackPage } from './selectors.js';
 import { showBanner, removeBanner } from './banner.js';
 import { getBlockReason } from '../state/store.js';
 import { logDiagnostic } from '../lib/diagnostics.js';
@@ -122,7 +122,7 @@ export function installAttackClickGuard(isBlockedFn) {
       : null;
     if (!button) return;
 
-    if (button.getAttribute('data-ucm-blocked') === 'true' || button.textContent.trim().toLowerCase() === 'start fight') {
+    if (button.getAttribute('data-ucm-blocked') === 'true' || isAttackButton(button)) {
       logDiagnostic('warn', 'attack', 'blocked attack click intercepted');
       event.preventDefault();
       event.stopPropagation();

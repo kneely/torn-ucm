@@ -14,24 +14,26 @@ export function isAttackPage() {
  * Returns the button element or null.
  */
 
-/** Tier 1: Exact CSS selector from settings */
-export function findByCssSelector() {
-  try {
-    const btn = document.querySelector(CONFIG.SELECTORS.CSS);
-    if (btn && isStartFightButton(btn)) return btn;
-  } catch (e) { /* selector may be invalid */ }
-  return null;
-}
-
-/** Tier 2: Semantic selector inside defender modal */
+/** Tier 1: Semantic selector inside defender modal */
 export function findBySemanticSelector() {
-  // Look for visible defender modal, find submit button with "Start fight" text
-  const buttons = document.querySelectorAll('button[type="submit"]');
+  const defenderModal = findDefenderModal();
+  if (!defenderModal) return null;
+
+  const buttons = defenderModal.querySelectorAll('button[type="submit"]');
   for (const btn of buttons) {
     if (isVisible(btn) && isStartFightButton(btn)) {
       return btn;
     }
   }
+  return null;
+}
+
+/** Tier 2: Exact CSS selector from settings */
+export function findByCssSelector() {
+  try {
+    const btn = document.querySelector(CONFIG.SELECTORS.CSS);
+    if (btn && isAttackButton(btn)) return btn;
+  } catch (e) { /* selector may be invalid */ }
   return null;
 }
 
@@ -46,16 +48,19 @@ export function findByXpath() {
       null
     );
     const btn = result.singleNodeValue;
-    if (btn && isStartFightButton(btn)) return btn;
+    if (btn && isAttackButton(btn)) return btn;
   } catch (e) { /* xpath may not match */ }
   return null;
 }
 
 /** Tier 4: Last resort text match */
 export function findByTextMatch() {
-  const buttons = document.querySelectorAll('button');
+  const defenderModal = findDefenderModal();
+  if (!defenderModal) return null;
+
+  const buttons = defenderModal.querySelectorAll('button');
   for (const btn of buttons) {
-    if (btn.textContent.trim() === 'Start fight' && isVisible(btn)) {
+    if (isStartFightButton(btn) && isVisible(btn)) {
       return btn;
     }
   }
@@ -66,10 +71,24 @@ export function findByTextMatch() {
  * Try all 4 tiers in order, return first match.
  */
 export function findAttackButton() {
-  return findByCssSelector()
-    || findBySemanticSelector()
+  return findBySemanticSelector()
+    || findByCssSelector()
     || findByXpath()
     || findByTextMatch();
+}
+
+export function findDefenderModal() {
+  const modals = document.querySelectorAll('[class*="defender"]');
+  for (const modal of modals) {
+    if (isVisible(modal)) return modal;
+  }
+  return null;
+}
+
+export function isAttackButton(btn) {
+  return isStartFightButton(btn)
+    && isVisible(btn)
+    && Boolean(btn.closest('[class*="defender"]'));
 }
 
 function isStartFightButton(btn) {

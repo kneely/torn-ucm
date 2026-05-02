@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn UCM - Ultimate Chain Manager
 // @namespace    https://github.com/kneely/torn-ucm-userscript
-// @version      0.0.7
+// @version      0.0.9
 // @description  Faction chain coordination for Torn - real-time commands, attack blocking, and presence tracking
 // @author       kneely
 // @match        https://www.torn.com/*
@@ -6453,7 +6453,7 @@
 	//#endregion
 	//#region src/lib/posthog.js
 	var APP_NAME = "torn-ucm-userscript";
-	var RELEASE = `${APP_NAME}@0.0.7`;
+	var RELEASE = `${APP_NAME}@0.0.9`;
 	var SENSITIVE_KEY_PATTERN = /apiKey|apikey|key|token|sessionToken|secret|authorization/i;
 	var SENSITIVE_URL_PATTERN = /([?&][^=]*(?:token|key|secret)[^=]*=)[^&\s]+/gi;
 	var initRequested = false;
@@ -6497,7 +6497,7 @@
 			logs: {
 				serviceName: APP_NAME,
 				environment: "production",
-				serviceVersion: "0.0.7",
+				serviceVersion: "0.0.9",
 				maxLogsPerInterval: 500
 			},
 			before_send(event) {
@@ -6508,7 +6508,7 @@
 				try {
 					posthog.register({
 						app: APP_NAME,
-						app_version: "0.0.7",
+						app_version: "0.0.9",
 						release: RELEASE,
 						runtime: "userscript"
 					});
@@ -8578,39 +8578,51 @@
 	* 4-tier attack button selector fallback strategy.
 	* Returns the button element or null.
 	*/
-	/** Tier 1: Exact CSS selector from settings */
+	/** Tier 1: Semantic selector inside defender modal */
+	function findBySemanticSelector() {
+		const defenderModal = findDefenderModal();
+		if (!defenderModal) return null;
+		const buttons = defenderModal.querySelectorAll("button[type=\"submit\"]");
+		for (const btn of buttons) if (isVisible(btn) && isStartFightButton(btn)) return btn;
+		return null;
+	}
+	/** Tier 2: Exact CSS selector from settings */
 	function findByCssSelector() {
 		try {
 			const btn = document.querySelector(CONFIG.SELECTORS.CSS);
-			if (btn && isStartFightButton(btn)) return btn;
+			if (btn && isAttackButton(btn)) return btn;
 		} catch (e) {}
-		return null;
-	}
-	/** Tier 2: Semantic selector inside defender modal */
-	function findBySemanticSelector() {
-		const buttons = document.querySelectorAll("button[type=\"submit\"]");
-		for (const btn of buttons) if (isVisible(btn) && isStartFightButton(btn)) return btn;
 		return null;
 	}
 	/** Tier 3: XPath fallback */
 	function findByXpath() {
 		try {
 			const btn = document.evaluate(CONFIG.SELECTORS.XPATH, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-			if (btn && isStartFightButton(btn)) return btn;
+			if (btn && isAttackButton(btn)) return btn;
 		} catch (e) {}
 		return null;
 	}
 	/** Tier 4: Last resort text match */
 	function findByTextMatch() {
-		const buttons = document.querySelectorAll("button");
-		for (const btn of buttons) if (btn.textContent.trim() === "Start fight" && isVisible(btn)) return btn;
+		const defenderModal = findDefenderModal();
+		if (!defenderModal) return null;
+		const buttons = defenderModal.querySelectorAll("button");
+		for (const btn of buttons) if (isStartFightButton(btn) && isVisible(btn)) return btn;
 		return null;
 	}
 	/**
 	* Try all 4 tiers in order, return first match.
 	*/
 	function findAttackButton() {
-		return findByCssSelector() || findBySemanticSelector() || findByXpath() || findByTextMatch();
+		return findBySemanticSelector() || findByCssSelector() || findByXpath() || findByTextMatch();
+	}
+	function findDefenderModal() {
+		const modals = document.querySelectorAll("[class*=\"defender\"]");
+		for (const modal of modals) if (isVisible(modal)) return modal;
+		return null;
+	}
+	function isAttackButton(btn) {
+		return isStartFightButton(btn) && isVisible(btn) && Boolean(btn.closest("[class*=\"defender\"]"));
 	}
 	function isStartFightButton(btn) {
 		return btn.textContent.trim().toLowerCase() === "start fight";
@@ -8744,7 +8756,7 @@
 			if (!isBlockedFn()) return;
 			const button = event.target instanceof Element ? event.target.closest("button") : null;
 			if (!button) return;
-			if (button.getAttribute("data-ucm-blocked") === "true" || button.textContent.trim().toLowerCase() === "start fight") {
+			if (button.getAttribute("data-ucm-blocked") === "true" || isAttackButton(button)) {
 				logDiagnostic("warn", "attack", "blocked attack click intercepted");
 				event.preventDefault();
 				event.stopPropagation();
