@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn UCM - Ultimate Chain Manager
 // @namespace    https://github.com/kneely/torn-ucm-userscript
-// @version      0.0.9
+// @version      0.0.10
 // @description  Faction chain coordination for Torn - real-time commands, attack blocking, and presence tracking
 // @author       kneely
 // @match        https://www.torn.com/*
@@ -15,7 +15,7 @@
 (function() {
 	//#region src/lib/posthog.js
 	var APP_NAME = "torn-ucm-userscript";
-	var RELEASE = `${APP_NAME}@0.0.9`;
+	var RELEASE = `${APP_NAME}@0.0.10`;
 	var SENSITIVE_KEY_PATTERN = /apiKey|apikey|key|token|sessionToken|secret|authorization/i;
 	var SENSITIVE_URL_PATTERN = /([?&][^=]*(?:token|key|secret)[^=]*=)[^&\s]+/gi;
 	var initRequested = false;
@@ -67,7 +67,7 @@
 			logs: {
 				serviceName: APP_NAME,
 				environment: "production",
-				serviceVersion: "0.0.9",
+				serviceVersion: "0.0.10",
 				maxLogsPerInterval: 500
 			},
 			before_send(event) {
@@ -78,7 +78,7 @@
 				try {
 					posthog.register({
 						app: APP_NAME,
-						app_version: "0.0.9",
+						app_version: "0.0.10",
 						release: RELEASE,
 						runtime: "userscript"
 					});
