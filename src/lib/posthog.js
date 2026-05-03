@@ -1,5 +1,3 @@
-import posthog from 'posthog-js';
-
 const APP_NAME = 'torn-ucm-userscript';
 const RELEASE = `${APP_NAME}@${__UCM_VERSION__}`;
 const SENSITIVE_KEY_PATTERN = /apiKey|apikey|key|token|sessionToken|secret|authorization/i;
@@ -41,7 +39,15 @@ function mapLogLevel(level) {
   return 'info';
 }
 
+function getPostHog() {
+  if (typeof window !== 'undefined' && window.posthog) return window.posthog;
+  if (typeof globalThis !== 'undefined' && globalThis.posthog) return globalThis.posthog;
+  if (typeof unsafeWindow !== 'undefined' && unsafeWindow.posthog) return unsafeWindow.posthog;
+  return undefined;
+}
+
 function callPostHog(methodName, ...args) {
+  const posthog = getPostHog();
   const method = posthog?.[methodName];
   if (typeof method !== 'function') return;
 
@@ -55,6 +61,9 @@ function callPostHog(methodName, ...args) {
 export function initPostHog() {
   if (initRequested) return;
   initRequested = true;
+
+  const posthog = getPostHog();
+  if (!posthog || typeof posthog.init !== 'function') return;
 
   posthog.init('phc_wnMwPVFMsUHMGA2BJ2rHfeYPEp24jC38DX4LA49EAYfg', {
     api_host: 'https://us.i.posthog.com',
