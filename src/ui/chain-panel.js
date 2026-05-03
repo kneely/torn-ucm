@@ -12,6 +12,7 @@ import {
   startChain,
 } from '../api/client.js';
 import { connectEventPolling, disconnectEventPolling } from '../api/event-poll-client.js';
+import { runRealtimeTransportTests } from '../api/realtime-diagnostics.js';
 import { handleEvent } from '../events/handler.js';
 import { state } from '../state/store.js';
 import {
@@ -240,6 +241,7 @@ function buildDiagnosticsHTML() {
       <div class="u-flex u-items-center u-justify-between u-gap-ucm-2 u-flex-wrap">
         <h3>Diagnostics</h3>
         <div class="u-flex u-gap-2">
+          <button id="ucm-diagnostics-test-realtime" class="ucm-secondary-button" type="button">Test Realtime</button>
           <button id="ucm-diagnostics-copy" class="ucm-secondary-button" type="button">Copy</button>
           <button id="ucm-diagnostics-clear" class="ucm-secondary-button" type="button">Clear</button>
         </div>
@@ -994,6 +996,28 @@ function bindEvents(force = false) {
       logDiagnostic('warn', 'diagnostics', 'diagnostics copy failed', {
         message: error?.message || 'unknown error',
       });
+    }
+  });
+
+  document.getElementById('ucm-diagnostics-test-realtime')?.addEventListener('click', async () => {
+    setChainPanelStatus('Testing realtime transports...');
+    let finalMessage = '';
+    let finalKind = 'info';
+    try {
+      const result = await runRealtimeTransportTests();
+      const websocketStatus = result.websocket?.ok ? 'WebSocket ok' : 'WebSocket failed';
+      const grpcStatus = result.grpcWeb?.ok ? 'gRPC-Web ok' : 'gRPC-Web failed';
+      finalMessage = `${websocketStatus}; ${grpcStatus}.`;
+      finalKind = result.websocket?.ok || result.grpcWeb?.ok ? 'success' : 'error';
+    } catch (error) {
+      finalMessage = error?.message || 'Realtime test failed.';
+      finalKind = 'error';
+    } finally {
+      await renderDiagnosticsView();
+      const { shell } = getElements();
+      if (shell) shell.hidden = false;
+      bindEvents(true);
+      setChainPanelStatus(finalMessage, finalKind);
     }
   });
 

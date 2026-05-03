@@ -1987,6 +1987,109 @@
 		document.head.appendChild(style);
 	}
 	//#endregion
+	//#region src/api/event-websocket-client.js
+	var OPEN_TIMEOUT_MS = 5e3;
+	function buildEventWebSocketUrl(backendUrl, sessionToken, after = 0) {
+		const url = new URL("/events/ws", backendUrl);
+		url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+		url.searchParams.set("token", sessionToken || "");
+		url.searchParams.set("after", String(Math.max(0, Number(after) || 0)));
+		return url.toString();
+	}
+	function parseWebSocketEvent(data) {
+		const text = typeof data === "string" ? data : String(data || "");
+		if (!text) return null;
+		const parsed = JSON.parse(text);
+		if (parsed?.type === "keepalive") return null;
+		if (!parsed?.eventType) return null;
+		return parsed;
+	}
+	function connectEventWebSocket(onEvent, options = {}) {
+		const WebSocketCtor = globalThis.WebSocket;
+		if (typeof WebSocketCtor !== "function" || !state.sessionToken) return null;
+		const lastEventId = Math.max(0, Number(options.lastEventId) || 0);
+		const url = buildEventWebSocketUrl(CONFIG.BACKEND_URL, state.sessionToken, lastEventId);
+		let opened = false;
+		let closedByClient = false;
+		let fallbackStarted = false;
+		let socket;
+		let openTimer = null;
+		const startFallback = (reason, details = {}) => {
+			if (fallbackStarted || closedByClient) return;
+			fallbackStarted = true;
+			if (openTimer) {
+				clearTimeout(openTimer);
+				openTimer = null;
+			}
+			try {
+				socket?.close();
+			} catch {}
+			logDiagnostic("warn", "events", "websocket falling back to polling", {
+				reason,
+				...details
+			});
+			options.onFallback?.(reason);
+		};
+		try {
+			socket = new WebSocketCtor(url);
+		} catch (error) {
+			logDiagnostic("warn", "events", "websocket creation failed", { message: error?.message || "unknown error" });
+			return null;
+		}
+		setSseStatus("connecting", {
+			transport: "websocket",
+			lastEventId,
+			url: redactUrl(url)
+		});
+		openTimer = setTimeout(() => {
+			if (!opened) startFallback("open_timeout", { timeoutMs: OPEN_TIMEOUT_MS });
+		}, OPEN_TIMEOUT_MS);
+		socket.onopen = () => {
+			opened = true;
+			if (openTimer) {
+				clearTimeout(openTimer);
+				openTimer = null;
+			}
+			setSseStatus("connected", {
+				transport: "websocket",
+				lastEventId
+			});
+		};
+		socket.onmessage = (message) => {
+			try {
+				const evt = parseWebSocketEvent(message?.data);
+				if (!evt) return;
+				onEvent(evt);
+				options.onCursor?.(evt.id);
+			} catch (error) {
+				logDiagnostic("warn", "events", "failed to parse websocket event", { message: error?.message || "unknown error" });
+			}
+		};
+		socket.onerror = () => {
+			if (!opened) startFallback("error_before_open");
+		};
+		socket.onclose = (event) => {
+			if (openTimer) {
+				clearTimeout(openTimer);
+				openTimer = null;
+			}
+			if (!closedByClient) startFallback(opened ? "closed" : "closed_before_open", {
+				code: event?.code,
+				reason: event?.reason || ""
+			});
+		};
+		return { close() {
+			closedByClient = true;
+			if (openTimer) {
+				clearTimeout(openTimer);
+				openTimer = null;
+			}
+			try {
+				socket.close();
+			} catch {}
+		} };
+	}
+	//#endregion
 	//#region src/api/event-poll-client.js
 	var POLL_TIMEOUT_MS = 15e3;
 	var MAX_RECONNECT_DELAY = 3e4;
@@ -2006,6 +2109,7 @@
 	var reconnectTimer = null;
 	var onEventCallback = null;
 	var lastEventId = 0;
+	var webSocketController = null;
 	function updateLastEventId(eventId) {
 		const parsedId = Number(eventId) || 0;
 		if (parsedId > lastEventId) lastEventId = parsedId;
@@ -2046,6 +2150,16 @@
 			pollLoop();
 		}, delayMs);
 	}
+	function startPollFallback(reason = "fallback") {
+		if (disposed) return;
+		webSocketController = null;
+		setSseStatus("connecting", {
+			transport: "poll",
+			fallbackReason: reason,
+			lastEventId
+		});
+		pollLoop();
+	}
 	async function pollLoop() {
 		if (disposed || isPolling) return;
 		isPolling = true;
@@ -2075,19 +2189,22 @@
 		disposed = false;
 		reconnectAttempts = 0;
 		lastEventId = Math.max(lastEventId, Number(state.eventCursor) || 0);
-		setSseStatus("connecting", {
-			transport: "poll",
-			lastEventId
-		});
 		if (reconnectTimer) {
 			clearTimeout(reconnectTimer);
 			reconnectTimer = null;
 		}
-		pollLoop();
+		webSocketController = connectEventWebSocket(dispatchEvent, {
+			lastEventId,
+			onCursor: updateLastEventId,
+			onFallback: startPollFallback
+		});
+		if (!webSocketController) startPollFallback("websocket_unavailable");
 	}
 	function disconnectEventPolling() {
 		disposed = true;
 		reconnectAttempts = 0;
+		webSocketController?.close();
+		webSocketController = null;
 		setSseStatus("disconnected", {
 			transport: "poll",
 			lastEventId
@@ -2096,6 +2213,192 @@
 			clearTimeout(reconnectTimer);
 			reconnectTimer = null;
 		}
+	}
+	//#endregion
+	//#region src/api/realtime-diagnostics.js
+	var PROBE_TIMEOUT_MS = 5e3;
+	var GRPC_WEB_CONTENT_TYPE = "application/grpc-web+proto";
+	function encodeVarint(value) {
+		let next = Math.max(0, Number(value) || 0);
+		const bytes = [];
+		while (next > 127) {
+			bytes.push(next & 127 | 128);
+			next = Math.floor(next / 128);
+		}
+		bytes.push(next);
+		return bytes;
+	}
+	function decodeVarint(bytes, offset) {
+		let result = 0;
+		let shift = 0;
+		let index = offset;
+		while (index < bytes.length) {
+			const byte = bytes[index++];
+			result += (byte & 127) * Math.pow(2, shift);
+			if ((byte & 128) === 0) return {
+				value: result,
+				offset: index
+			};
+			shift += 7;
+		}
+		throw new Error("invalid protobuf varint");
+	}
+	function encodeStringField(fieldNumber, value) {
+		const encoded = new TextEncoder().encode(String(value || ""));
+		return [
+			fieldNumber << 3 | 2,
+			...encodeVarint(encoded.length),
+			...encoded
+		];
+	}
+	function buildGrpcWebPingUrl(backendUrl) {
+		return new URL("/tornucm.diagnostics.Diagnostics/Ping", backendUrl).toString();
+	}
+	function encodeGrpcWebPingRequest(client = "ucm-userscript") {
+		const message = new Uint8Array(encodeStringField(1, client));
+		const frame = new Uint8Array(5 + message.length);
+		frame[0] = 0;
+		new DataView(frame.buffer).setUint32(1, message.length, false);
+		frame.set(message, 5);
+		return frame;
+	}
+	function decodePingReplyMessage(message) {
+		const reply = {
+			status: "",
+			transport: "",
+			serverUnixMs: 0
+		};
+		let offset = 0;
+		const decoder = new TextDecoder();
+		while (offset < message.length) {
+			const tag = message[offset++];
+			const fieldNumber = tag >> 3;
+			const wireType = tag & 7;
+			if (wireType === 2) {
+				const length = decodeVarint(message, offset);
+				offset = length.offset;
+				const valueBytes = message.slice(offset, offset + length.value);
+				offset += length.value;
+				const value = decoder.decode(valueBytes);
+				if (fieldNumber === 1) reply.status = value;
+				if (fieldNumber === 2) reply.transport = value;
+				continue;
+			}
+			if (wireType === 0) {
+				const value = decodeVarint(message, offset);
+				offset = value.offset;
+				if (fieldNumber === 3) reply.serverUnixMs = value.value;
+				continue;
+			}
+			throw new Error(`unsupported protobuf wire type ${wireType}`);
+		}
+		return reply;
+	}
+	function decodeGrpcWebPingReply(buffer) {
+		const bytes = new Uint8Array(buffer);
+		let offset = 0;
+		while (offset + 5 <= bytes.length) {
+			const frameType = bytes[offset];
+			const length = new DataView(bytes.buffer, bytes.byteOffset + offset + 1, 4).getUint32(0, false);
+			offset += 5;
+			const message = bytes.slice(offset, offset + length);
+			offset += length;
+			if ((frameType & 128) === 0) return decodePingReplyMessage(message);
+		}
+		throw new Error("gRPC-Web response did not include a data frame");
+	}
+	function withTimeout(promise, timeoutMs, label) {
+		let timer;
+		const timeout = new Promise((_, reject) => {
+			timer = setTimeout(() => reject(/* @__PURE__ */ new Error(`${label} timed out`)), timeoutMs);
+		});
+		return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+	}
+	async function probeWebSocket() {
+		if (typeof WebSocket !== "function") throw new Error("WebSocket constructor is unavailable");
+		if (!state.sessionToken) throw new Error("session token is missing");
+		const url = buildEventWebSocketUrl(CONFIG.BACKEND_URL, state.sessionToken, state.eventCursor || 0);
+		const started = performance.now();
+		return withTimeout(new Promise((resolve, reject) => {
+			let socket;
+			try {
+				socket = new WebSocket(url);
+			} catch (error) {
+				reject(error);
+				return;
+			}
+			socket.onopen = () => {
+				const ms = Math.round(performance.now() - started);
+				socket.close();
+				resolve({
+					ok: true,
+					transport: "websocket",
+					ms
+				});
+			};
+			socket.onerror = () => reject(/* @__PURE__ */ new Error("WebSocket error before open"));
+			socket.onclose = (event) => {
+				if (event?.code && event.code !== 1e3) reject(/* @__PURE__ */ new Error(`WebSocket closed with ${event.code}`));
+			};
+		}), PROBE_TIMEOUT_MS, "WebSocket probe").catch((error) => {
+			throw new Error(`${error?.message || "unknown error"} (${redactUrl(url)})`);
+		});
+	}
+	async function probeGrpcWeb() {
+		if (typeof fetch !== "function") throw new Error("fetch is unavailable");
+		if (!state.sessionToken) throw new Error("session token is missing");
+		const url = buildGrpcWebPingUrl(CONFIG.BACKEND_URL);
+		const started = performance.now();
+		const response = await withTimeout(fetch(url, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${state.sessionToken}`,
+				"Content-Type": GRPC_WEB_CONTENT_TYPE,
+				Accept: GRPC_WEB_CONTENT_TYPE,
+				"X-Grpc-Web": "1"
+			},
+			body: encodeGrpcWebPingRequest("ucm-userscript")
+		}), PROBE_TIMEOUT_MS, "gRPC-Web probe");
+		const grpcStatus = response.headers?.get?.("grpc-status");
+		if (!response.ok || grpcStatus && grpcStatus !== "0") throw new Error(`gRPC-Web HTTP ${response.status} grpc-status ${grpcStatus || "missing"}`);
+		const reply = decodeGrpcWebPingReply(await response.arrayBuffer());
+		const ms = Math.round(performance.now() - started);
+		return {
+			ok: reply.status === "ok",
+			transport: reply.transport || "grpc-web",
+			ms,
+			reply
+		};
+	}
+	async function runNamedProbe(name, probe) {
+		try {
+			const result = await probe();
+			logDiagnostic(result.ok ? "ok" : "warn", "diagnostics", `${name} probe ${result.ok ? "passed" : "failed"}`, result);
+			return {
+				name,
+				...result
+			};
+		} catch (error) {
+			const result = {
+				name,
+				ok: false,
+				message: error?.message || "unknown error"
+			};
+			logDiagnostic("warn", "diagnostics", `${name} probe failed`, result);
+			return result;
+		}
+	}
+	async function runRealtimeTransportTests() {
+		logDiagnostic("info", "diagnostics", "realtime transport probes started");
+		const [websocket, grpcWeb] = await Promise.all([runNamedProbe("WebSocket", probeWebSocket), runNamedProbe("gRPC-Web", probeGrpcWeb)]);
+		logDiagnostic("info", "diagnostics", "realtime transport probes completed", {
+			websocket: websocket.ok,
+			grpcWeb: grpcWeb.ok
+		});
+		return {
+			websocket,
+			grpcWeb
+		};
 	}
 	//#endregion
 	//#region src/dom/selectors.js
@@ -2743,6 +3046,7 @@
       <div class="u-flex u-items-center u-justify-between u-gap-ucm-2 u-flex-wrap">
         <h3>Diagnostics</h3>
         <div class="u-flex u-gap-2">
+          <button id="ucm-diagnostics-test-realtime" class="ucm-secondary-button" type="button">Test Realtime</button>
           <button id="ucm-diagnostics-copy" class="ucm-secondary-button" type="button">Copy</button>
           <button id="ucm-diagnostics-clear" class="ucm-secondary-button" type="button">Clear</button>
         </div>
@@ -3389,6 +3693,25 @@
 			} catch (error) {
 				setChainPanelStatus("Unable to copy diagnostics. Use console __UCM_DIAGNOSTICS__.text().", "error");
 				logDiagnostic("warn", "diagnostics", "diagnostics copy failed", { message: error?.message || "unknown error" });
+			}
+		});
+		document.getElementById("ucm-diagnostics-test-realtime")?.addEventListener("click", async () => {
+			setChainPanelStatus("Testing realtime transports...");
+			let finalMessage = "";
+			let finalKind = "info";
+			try {
+				const result = await runRealtimeTransportTests();
+				finalMessage = `${result.websocket?.ok ? "WebSocket ok" : "WebSocket failed"}; ${result.grpcWeb?.ok ? "gRPC-Web ok" : "gRPC-Web failed"}.`;
+				finalKind = result.websocket?.ok || result.grpcWeb?.ok ? "success" : "error";
+			} catch (error) {
+				finalMessage = error?.message || "Realtime test failed.";
+				finalKind = "error";
+			} finally {
+				await renderDiagnosticsView();
+				const { shell } = getElements();
+				if (shell) shell.hidden = false;
+				bindEvents(true);
+				setChainPanelStatus(finalMessage, finalKind);
 			}
 		});
 		for (const chainButton of chainButtons) chainButton.addEventListener("click", async () => {

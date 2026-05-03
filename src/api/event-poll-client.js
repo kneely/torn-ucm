@@ -1,6 +1,7 @@
 import { state } from '../state/store.js';
 import { logDiagnostic, setSseStatus } from '../lib/diagnostics.js';
 import { pollEvents } from './client.js';
+import { connectEventWebSocket } from './event-websocket-client.js';
 
 const POLL_TIMEOUT_MS = 15000;
 const MAX_RECONNECT_DELAY = 30000;
@@ -21,6 +22,7 @@ let reconnectAttempts = 0;
 let reconnectTimer = null;
 let onEventCallback = null;
 let lastEventId = 0;
+let webSocketController = null;
 
 function updateLastEventId(eventId) {
   const parsedId = Number(eventId) || 0;
@@ -76,6 +78,17 @@ function scheduleReconnect() {
   }, delayMs);
 }
 
+function startPollFallback(reason = 'fallback') {
+  if (disposed) return;
+  webSocketController = null;
+  setSseStatus('connecting', {
+    transport: 'poll',
+    fallbackReason: reason,
+    lastEventId,
+  });
+  void pollLoop();
+}
+
 async function pollLoop() {
   if (disposed || isPolling) return;
   isPolling = true;
@@ -117,19 +130,28 @@ export function connectEventPolling(onEvent) {
   disposed = false;
   reconnectAttempts = 0;
   lastEventId = Math.max(lastEventId, Number(state.eventCursor) || 0);
-  setSseStatus('connecting', { transport: 'poll', lastEventId });
 
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
 
-  void pollLoop();
+  webSocketController = connectEventWebSocket(dispatchEvent, {
+    lastEventId,
+    onCursor: updateLastEventId,
+    onFallback: startPollFallback,
+  });
+
+  if (!webSocketController) {
+    startPollFallback('websocket_unavailable');
+  }
 }
 
 export function disconnectEventPolling() {
   disposed = true;
   reconnectAttempts = 0;
+  webSocketController?.close();
+  webSocketController = null;
   setSseStatus('disconnected', { transport: 'poll', lastEventId });
 
   if (reconnectTimer) {
